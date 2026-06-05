@@ -105,7 +105,15 @@ private func encodeArray(_ arr: [Any], name: String, lines: inout [String], dept
         return
     }
 
-    // Non-uniform array.
+    // Primitive array: inline as comma-separated values.
+    let allPrimitive = arr.allSatisfy { !isObject($0) && !isArray($0) }
+    if allPrimitive {
+        let vals = arr.map { formatValue($0) }.joined(separator: ",")
+        lines.append("\(prefix)\(name)[\(arr.count)]: \(vals)")
+        return
+    }
+
+    // Non-uniform with objects: per-item encoding.
     lines.append("\(prefix)## \(name) [\(arr.count)]")
     for (i, item) in arr.enumerated() {
         if isObject(item) {
