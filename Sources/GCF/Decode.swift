@@ -14,7 +14,7 @@ public enum DecodeError: Error, Equatable {
 
 /// Decode parses GCF text back into a Payload.
 public func decode(_ input: String) throws -> Payload {
-    let lines = input.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let lines = input.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     guard !lines.isEmpty else {
         throw DecodeError.emptyInput
     }
