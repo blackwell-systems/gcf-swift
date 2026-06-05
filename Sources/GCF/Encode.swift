@@ -4,18 +4,21 @@ import Foundation
 public func encode(_ payload: Payload) -> String {
     var b = ""
 
-    // Header line.
-    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count)"
-    if !payload.packRoot.isEmpty {
-        b += " pack_root=\(payload.packRoot)"
-    }
-    b += "\n"
-
     // Build symbol index for edge references.
     var symIndex: [String: Int] = [:]
     for (i, s) in payload.symbols.enumerated() {
         symIndex[s.qualifiedName] = i
     }
+
+    // Count valid edges (both endpoints in symbol index).
+    let validEdges = payload.edges.filter { symIndex[$0.source] != nil && symIndex[$0.target] != nil }.count
+
+    // Header line.
+    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges)"
+    if !payload.packRoot.isEmpty {
+        b += " pack_root=\(payload.packRoot)"
+    }
+    b += "\n"
 
     // Group symbols by distance.
     let groups = groupByDistance(payload.symbols)
@@ -40,7 +43,7 @@ public func encode(_ payload: Payload) -> String {
 
     // Edges section.
     if !payload.edges.isEmpty {
-        b += "## edges\n"
+        b += "## edges [\(validEdges)]\n"
         for e in payload.edges {
             guard let srcIdx = symIndex[e.source],
                   let tgtIdx = symIndex[e.target] else { continue }

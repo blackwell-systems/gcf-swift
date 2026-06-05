@@ -43,7 +43,11 @@ public func decode(_ input: String) throws -> Payload {
 
         // Group header.
         if trimmed.hasPrefix("## ") {
-            let group = String(trimmed.dropFirst(3))
+            var group = String(trimmed.dropFirst(3))
+            // Strip bracket suffix: "edges [200]" -> "edges"
+            if let bracketIdx = group.range(of: " [") {
+                group = String(group[..<bracketIdx.lowerBound])
+            }
             inEdges = (group == "edges")
             if !inEdges {
                 switch group {

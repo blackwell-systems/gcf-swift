@@ -67,18 +67,21 @@ public func encodeWithSession(_ payload: Payload, session: Session?) -> String {
 
     var b = ""
 
-    // Header with session=true marker.
-    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) session=true"
-    if !payload.packRoot.isEmpty {
-        b += " pack_root=\(payload.packRoot)"
-    }
-    b += "\n"
-
     // Build local ID mapping for this response.
     var localIndex: [String: Int] = [:]
     for (i, s) in payload.symbols.enumerated() {
         localIndex[s.qualifiedName] = i
     }
+
+    // Count valid edges.
+    let validEdges = payload.edges.filter { localIndex[$0.source] != nil && localIndex[$0.target] != nil }.count
+
+    // Header with session=true marker.
+    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges) session=true"
+    if !payload.packRoot.isEmpty {
+        b += " pack_root=\(payload.packRoot)"
+    }
+    b += "\n"
 
     // Group by distance.
     let groups = groupByDistance(payload.symbols)
@@ -109,7 +112,7 @@ public func encodeWithSession(_ payload: Payload, session: Session?) -> String {
 
     // Edges section.
     if !payload.edges.isEmpty {
-        b += "## edges\n"
+        b += "## edges [\(validEdges)]\n"
         for e in payload.edges {
             guard let srcIdx = localIndex[e.source],
                   let tgtIdx = localIndex[e.target] else { continue }
