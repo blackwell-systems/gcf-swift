@@ -2,6 +2,7 @@
 
 ## v0.5.0 (2026-06-05)
 
+- `GenericStreamEncoder`: zero-buffering tabular streaming encode (beginArray/writeRow/endArray/writeKV/writeSection/writeInlineArray)
 - `decodeGeneric`: parse GCF tabular text into `Any` (tabular arrays, key-value, nested sections, inline arrays, nested row fields, empty arrays, graph fallback)
 
 ## v0.3.0 (2026-06-05)
