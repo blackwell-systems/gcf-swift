@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.0 (2026-06-05)
+
+- `decodeGeneric`: parse GCF tabular text into `Any` (tabular arrays, key-value, nested sections, inline arrays, nested row fields, empty arrays, graph fallback)
+
 ## v0.3.0 (2026-06-05)
 
 - `encodeGeneric`: primitive arrays inlined as `name[N]: val1,val2,val3`
