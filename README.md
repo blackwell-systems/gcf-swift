@@ -82,6 +82,20 @@ let out2 = encodeWithSession(payload2, session: session) // reused symbols as "@
 
 By the 5th call in a session: 92.7% token savings vs JSON.
 
+## Streaming Encode
+
+Write GCF output incrementally as symbols and edges arrive. Zero buffering, O(1) memory per row:
+
+```swift
+let enc = StreamEncoder(writer: myWriter, tool: "context_for_task", options: StreamOptions(tokenBudget: 5000))
+
+enc.writeSymbol(Symbol(qualifiedName: "pkg.Auth", kind: "function", score: 0.95, provenance: "lsp", distance: 0))
+enc.writeEdge(Edge(source: "pkg.Server", target: "pkg.Auth", edgeType: "calls"))
+enc.close()  // emits ## _summary trailer
+```
+
+Output uses `[?]` deferred counts and `## _summary` trailer. Standard `decode()` handles streaming output with no changes. Thread-safe via NSLock.
+
 ## Delta Encoding
 
 When the consumer already has a prior context pack, send only what changed:
