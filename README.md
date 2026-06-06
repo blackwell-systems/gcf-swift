@@ -8,7 +8,7 @@
 
 Swift implementation of [GCF (Graph Compact Format)](https://gcformat.com/) -- the most token-efficient wire format for LLMs. A drop-in alternative to JSON and TOON for any structured data.
 
-**79% fewer input tokens than JSON. 75% fewer output tokens. 52% smaller than TOON. 100% LLM comprehension at 500 symbols, where JSON fails at 66.7%.**
+**79% fewer input tokens than JSON. 75% fewer output tokens. 52% smaller than TOON. 100% LLM comprehension at 500 symbols, where JSON scores 76.9% and TOON scores 92.3%.**
 
 Docs: [gcformat.com](https://gcformat.com/) · [Playground](https://gcformat.com/playground.html) · [GCF vs TOON](https://gcformat.com/guide/vs-toon.html)
 
@@ -18,7 +18,7 @@ Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/blackwell-systems/gcf-swift.git", from: "0.1.0"),
+    .package(url: "https://github.com/blackwell-systems/gcf-swift.git", from: "0.3.0"),
 ]
 ```
 
