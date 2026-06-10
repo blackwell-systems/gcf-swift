@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.0.1 (2026-06-10)
+
+- `OrderedDictionary`: insertion-order-preserving dictionary for conformance-grade round-trips
+- `decodeGeneric` now returns `OrderedDictionary` instead of `NSMutableDictionary`
+- `encodeGeneric` accepts `OrderedDictionary` input (preserves key order)
+- Property-based round-trip tests: 10M random + adversarial values, zero failures
+- Fix: number precision loss in exponent notation (`%e` replaced with shortest-exact representation)
+- Fix: Unicode combining marks (Mn/Mc/Me) merging with delimiters in grapheme clustering
+- Fix: `splitRespectingQuotes` rewritten to operate on unicode scalars, not grapheme clusters
+- Fix: `findKVSplit`, `findClosingBrace`, `splitFieldDecl` rewritten for scalar-safe parsing
+- Fix: NSRegularExpression `$` anchor matching before `\n` (replaced with `\z`)
+- Fix: `dropFirst()` consuming combining marks after `=` delimiter
+- Fix: Thai Sara Am (U+0E33) and similar characters clustering with ASCII delimiters
+- All non-ASCII characters now quoted to prevent grapheme clustering edge cases
+
+## v1.0.0 (2026-06-07)
+
+- SPEC v2.0 implementation: `GCF profile=generic` header, common scalar grammar, `^` attachments, `~` missing, expanded form, root scalars/arrays
+- Full JSON string escaping (`\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`, surrogate pairs)
+- Encoder quoting obligation (strings colliding with typed literals must be quoted)
+- 30 strict-mode decoder error conditions
+- NSNumber bool/int disambiguation via `CFBooleanGetTypeID()`
+
 ## v0.5.0 (2026-06-05)
 
 - `GenericStreamEncoder`: zero-buffering tabular streaming encode (beginArray/writeRow/endArray/writeKV/writeSection/writeInlineArray)

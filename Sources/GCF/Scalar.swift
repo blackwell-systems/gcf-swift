@@ -3,13 +3,13 @@ import Foundation
 // MARK: - Common Scalar Grammar for GCF v2.0
 
 private let jsonNumberPattern = try! NSRegularExpression(
-    pattern: "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$"
+    pattern: "\\A-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\z"
 )
 private let numericLikePattern = try! NSRegularExpression(
-    pattern: "^[+-]?\\.?\\d"
+    pattern: "\\A[+-]?\\.?\\d"
 )
 private let bareKeyPattern = try! NSRegularExpression(
-    pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
+    pattern: "\\A[a-zA-Z_][a-zA-Z0-9_]*\\z"
 )
 
 public func needsQuote(_ s: String) -> Bool {
@@ -23,6 +23,10 @@ public func needsQuote(_ s: String) -> Bool {
     for c in s.unicodeScalars {
         if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
             || c == "\n" || c == "\r" { return true }
+        // Quote any non-ASCII character. Swift's grapheme clustering can merge
+        // non-ASCII characters (combining marks, Thai vowels, etc.) with adjacent
+        // ASCII delimiters like =, |, and ", breaking parse operations.
+        if c.value > 0x7F { return true }
     }
     return false
 }
@@ -97,10 +101,16 @@ public func formatNumber(_ f: Double) -> String {
         }
         return s
     }
-    // Exponent notation.
-    var s = String(format: "%e", f)
-    // Normalize: lowercase e, explicit sign, no leading zeros in exponent.
-    if let eIdx = s.firstIndex(of: "e") {
+    // Exponent notation: use Swift's shortest-exact representation
+    // then normalize the exponent format.
+    var s = "\(f)"
+    // Ensure it has an exponent.
+    if !s.contains("e") && !s.contains("E") {
+        // Force exponent form.
+        s = String(format: "%.17e", f)
+    }
+    // Normalize: lowercase e, explicit sign, no leading zeros in exponent, strip trailing zeros.
+    if let eIdx = s.firstIndex(of: "e") ?? s.firstIndex(of: "E") {
         let mantissa = String(s[s.startIndex..<eIdx])
             .replacingOccurrences(of: "0+$", with: "", options: .regularExpression)
             .replacingOccurrences(of: "\\.$", with: "", options: .regularExpression)
@@ -143,7 +153,7 @@ public enum ScalarResult {
 
 public func parseScalar(_ s: String, tabularContext: Bool = false) throws -> ScalarResult {
     if s.isEmpty { return .string("") }
-    if s.first == "\"" { return .string(try parseQuotedString(s)) }
+    if s.unicodeScalars.first == "\"" { return .string(try parseQuotedString(s)) }
     if s == "-" { return .null }
     if s == "~" {
         if !tabularContext { throw GCFError.invalidMissing }
@@ -286,29 +296,36 @@ public func parseQuotedString(_ s: String) throws -> String {
 }
 
 public func splitRespectingQuotes(_ s: String, delimiter: Character) -> [String] {
+    let delimScalar = delimiter.unicodeScalars.first!
     var parts: [String] = []
-    var current = ""
+    var current: [Unicode.Scalar] = []
     var inQuote = false
     var escaped = false
-    for c in s {
+    for c in s.unicodeScalars {
         if escaped { current.append(c); escaped = false; continue }
         if c == "\\" && inQuote { current.append(c); escaped = true; continue }
         if c == "\"" { inQuote = !inQuote; current.append(c); continue }
-        if c == delimiter && !inQuote { parts.append(current); current = ""; continue }
+        if c == delimScalar && !inQuote {
+            parts.append(String(String.UnicodeScalarView(current)))
+            current = []
+            continue
+        }
         current.append(c)
     }
-    parts.append(current)
+    parts.append(String(String.UnicodeScalarView(current)))
     return parts
 }
 
 public func splitFieldDecl(_ s: String) throws -> [String] {
-    guard s.count >= 2, s.first == "{" else {
+    guard s.unicodeScalars.count >= 2, s.unicodeScalars.first == "{" else {
         throw GCFError.invalidFieldDeclaration(s)
     }
     guard let closeIdx = findClosingBrace(s) else {
         throw GCFError.invalidFieldDeclaration(s)
     }
-    let inner = String(s[s.index(s.startIndex, offsetBy: 1)..<s.index(s.startIndex, offsetBy: closeIdx)])
+    let startIdx = s.unicodeScalars.index(after: s.unicodeScalars.startIndex)
+    let endIdx = s.unicodeScalars.index(s.unicodeScalars.startIndex, offsetBy: closeIdx)
+    let inner = String(s[startIdx..<endIdx])
     if inner.isEmpty { return [] }
     let raw = splitRespectingQuotes(inner, delimiter: ",")
     var fields: [String] = []
@@ -316,7 +333,7 @@ public func splitFieldDecl(_ s: String) throws -> [String] {
     for f in raw {
         let trimmed = f.trimmingCharacters(in: .whitespaces)
         let name: String
-        if trimmed.count >= 2 && trimmed.first == "\"" && trimmed.last == "\"" {
+        if trimmed.count >= 2 && trimmed.unicodeScalars.first == "\"" && trimmed.unicodeScalars.last == "\"" {
             name = try parseQuotedString(trimmed)
         } else {
             guard isBareKey(trimmed) else {
@@ -331,14 +348,17 @@ public func splitFieldDecl(_ s: String) throws -> [String] {
     return fields
 }
 
+/// Returns the unicode scalar offset of the closing `}`.
 public func findClosingBrace(_ s: String) -> Int? {
     var inQuote = false
     var escaped = false
-    for (i, c) in s.enumerated() {
-        if escaped { escaped = false; continue }
-        if c == "\\" && inQuote { escaped = true; continue }
-        if c == "\"" { inQuote = !inQuote; continue }
-        if c == "}" && !inQuote { return i }
+    var offset = 0
+    for c in s.unicodeScalars {
+        if escaped { escaped = false; offset += 1; continue }
+        if c == "\\" && inQuote { escaped = true; offset += 1; continue }
+        if c == "\"" { inQuote = !inQuote; offset += 1; continue }
+        if c == "}" && !inQuote { return offset }
+        offset += 1
     }
     return nil
 }

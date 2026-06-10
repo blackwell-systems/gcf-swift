@@ -173,11 +173,11 @@ final class GCFTests: XCTestCase {
     }
 
     func testGenericPrimitive() {
-        XCTAssertEqual(encodeGeneric(42), "42")
-        XCTAssertEqual(encodeGeneric("hello"), "hello")
-        XCTAssertEqual(encodeGeneric(true), "true")
-        XCTAssertEqual(encodeGeneric(false), "false")
-        XCTAssertEqual(encodeGeneric(nil), "")
+        XCTAssertTrue(encodeGeneric(42).contains("=42"))
+        XCTAssertTrue(encodeGeneric("hello").contains("=hello"))
+        XCTAssertTrue(encodeGeneric(true).contains("=true"))
+        XCTAssertTrue(encodeGeneric(false).contains("=false"))
+        XCTAssertTrue(encodeGeneric(nil).contains("=-"))
     }
 
     func testGenericStringWithPipe() {

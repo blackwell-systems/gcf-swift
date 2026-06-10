@@ -28,13 +28,18 @@ private func encodeRootValue(_ v: Any?, out: inout String) {
 }
 
 /// Extract ordered key-value pairs from a dictionary.
-/// NSDictionary preserves insertion order from JSONSerialization.
+/// OrderedDictionary preserves insertion order.
+/// NSDictionary uses sorted keys (allKeys order is not reliable).
 /// Swift [String: Any] uses sorted keys as fallback.
 func asOrderedDict(_ v: Any) -> [(String, Any)]? {
+    if let od = v as? OrderedDictionary {
+        return od.orderedPairs
+    }
     if let nsDict = v as? NSDictionary {
-        return nsDict.allKeys.compactMap { key -> (String, Any)? in
-            guard let k = key as? String, let val = nsDict[key] else { return nil }
-            return (k, val)
+        let keys = nsDict.allKeys.compactMap { $0 as? String }.sorted()
+        return keys.compactMap { key -> (String, Any)? in
+            guard let val = nsDict[key] else { return nil }
+            return (key, val)
         }
     }
     if let dict = v as? [String: Any] {
@@ -194,7 +199,7 @@ private func encodeExpandedArrayItem(_ prefix: String, idx: Int, arr: [Any], out
 }
 
 private func allPrimitives(_ arr: [Any]) -> Bool {
-    return arr.allSatisfy { !($0 is [String: Any]) && !($0 is NSDictionary) && !($0 is [Any]) }
+    return arr.allSatisfy { !($0 is [String: Any]) && !($0 is NSDictionary) && !($0 is OrderedDictionary) && !($0 is [Any]) }
 }
 
 private func indentStr(_ depth: Int) -> String {

@@ -39,14 +39,15 @@ public func decodeGeneric(_ input: String) throws -> Any {
         try validateSummaryCounts(summaryLine, deferredCount: deferredCount, contentLines: contentLines)
     }
 
-    if contentLines.isEmpty { return [String: Any]() as NSDictionary }
+    if contentLines.isEmpty { return OrderedDictionary() }
 
     let first = contentLines[0].trimmingCharacters(in: CharacterSet(charactersIn: " "))
 
     // Root scalar.
     if first.hasPrefix("=") {
         if contentLines.count > 1 { throw GCFError.trailingCharacters }
-        return try scalarToAny(parseScalar(String(first.dropFirst())))
+        let afterEq = first.unicodeScalars.index(after: first.unicodeScalars.startIndex)
+        return try scalarToAny(parseScalar(String(first[afterEq...])))
     }
 
     // Root array.
@@ -57,7 +58,7 @@ public func decodeGeneric(_ input: String) throws -> Any {
     }
 
     // Root object.
-    var result = NSMutableDictionary()
+    var result = OrderedDictionary()
     _ = try parseObjectBody(contentLines, start: 0, depth: 0, out: &result)
     return result
 }
@@ -92,7 +93,7 @@ private func scalarToAny(_ sv: ScalarResult) throws -> Any {
 }
 
 private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
-                              out: inout NSMutableDictionary) throws -> Int {
+                              out: inout OrderedDictionary) throws -> Int {
     let ind = String(repeating: "  ", count: depth)
     var i = start
     while i < lines.count {
@@ -118,7 +119,7 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
             let name = try parseKeyFromHeader(hdr)
             try checkDup(out, key: name)
             i += 1
-            var nested = NSMutableDictionary()
+            var nested = OrderedDictionary()
             let consumed = try parseObjectBody(lines, start: i, depth: depth + 1, out: &nested)
             out[name] = nested
             i += consumed
@@ -147,7 +148,8 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
         if let eqIdx = findKVSplit(content), eqIdx > content.startIndex {
             let name = try parseKeyFromHeader(String(content[content.startIndex..<eqIdx]))
             try checkDup(out, key: name)
-            let val = try scalarToAny(parseScalar(String(content[content.index(after: eqIdx)...])))
+            let afterEq = content.unicodeScalars.index(after: eqIdx)
+            let val = try scalarToAny(parseScalar(String(content[afterEq...])))
             out[name] = val
             i += 1
             continue
@@ -160,31 +162,36 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
 
 private func findKVSplit(_ s: String) -> String.Index? {
     if s.isEmpty { return nil }
-    if s.first == "\"" {
-        var i = s.index(after: s.startIndex)
-        while i < s.endIndex {
-            if s[i] == "\\" { i = s.index(i, offsetBy: 2, limitedBy: s.endIndex) ?? s.endIndex; continue }
-            if s[i] == "\"" {
-                let next = s.index(after: i)
-                if next < s.endIndex && s[next] == "=" { return next }
+    let scalars = s.unicodeScalars
+    if scalars.first == "\"" {
+        var i = scalars.index(after: scalars.startIndex)
+        while i < scalars.endIndex {
+            if scalars[i] == "\\" { i = scalars.index(i, offsetBy: 2, limitedBy: scalars.endIndex) ?? scalars.endIndex; continue }
+            if scalars[i] == "\"" {
+                let next = scalars.index(after: i)
+                if next < scalars.endIndex && scalars[next] == "=" { return next }
                 return nil
             }
-            i = s.index(after: i)
+            i = scalars.index(after: i)
         }
         return nil
     }
-    return s.firstIndex(of: "=")
+    // Find first unquoted '=' using scalar view.
+    for i in scalars.indices {
+        if scalars[i] == "=" { return i }
+    }
+    return nil
 }
 
 private func parseKeyFromHeader(_ s: String) throws -> String {
     let trimmed = s.trimmingCharacters(in: .whitespaces)
-    if trimmed.count >= 2 && trimmed.first == "\"" {
+    if trimmed.count >= 2 && trimmed.unicodeScalars.first == "\"" {
         return try parseQuotedString(trimmed)
     }
     return trimmed
 }
 
-private func checkDup(_ dict: NSMutableDictionary, key: String) throws {
+private func checkDup(_ dict: OrderedDictionary, key: String) throws {
     if dict[key] != nil { throw GCFError.duplicateKey(key) }
 }
 
@@ -217,7 +224,8 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
     // Tabular.
     if after.hasPrefix("{") {
         guard let braceEnd = findClosingBrace(after) else { throw GCFError.invalidFieldDeclaration(after) }
-        let declStr = String(after[after.startIndex...after.index(after.startIndex, offsetBy: braceEnd)])
+        let braceIdx = after.unicodeScalars.index(after.unicodeScalars.startIndex, offsetBy: braceEnd)
+        let declStr = String(after[after.startIndex...braceIdx])
         let fields = try splitFieldDecl(declStr)
         let (rows, consumed) = try parseTabularBody(lines, start: headerLine + 1, depth: depth, fields: fields, expectedCount: count)
         if count >= 0 && rows.count != count { throw GCFError.countMismatch(count, rows.count) }
@@ -264,7 +272,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         let vals = splitRespectingQuotes(rowData, delimiter: "|")
         if vals.count != fields.count { throw GCFError.rowWidthMismatch(fields.count, vals.count) }
 
-        var cellValues = NSMutableDictionary()
+        let cellValues = OrderedDictionary()
         var attachmentFields: [String] = []
         var missingFields = Set<String>()
         for (j, f) in fields.enumerated() {
@@ -278,7 +286,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         i += 1
 
         // Parse attachments.
-        let attachmentValues = NSMutableDictionary()
+        let attachmentValues = OrderedDictionary()
         if rowHasID && !attachmentFields.isEmpty {
             let attIndent = ind + "  "
             while i < lines.count {
@@ -306,7 +314,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         }
 
         // Build row in field order.
-        let row = NSMutableDictionary()
+        let row = OrderedDictionary()
         for f in fields {
             if missingFields.contains(f) { continue }
             if let v = cellValues[f] { row[f] = v; continue }
@@ -323,7 +331,7 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String,
                               depth: Int) throws -> (String, Any, Int) {
     let name: String
     let afterName: String
-    if rest.first == "\"" {
+    if rest.unicodeScalars.first == "\"" {
         var closeIdx: String.Index? = nil
         var j = rest.index(after: rest.startIndex)
         while j < rest.endIndex {
@@ -341,7 +349,7 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String,
     }
 
     if afterName.hasPrefix("{}") {
-        var nested = NSMutableDictionary()
+        var nested = OrderedDictionary()
         let consumed = try parseObjectBody(lines, start: lineIdx + 1, depth: depth, out: &nested)
         return (name, nested, consumed + 1)
     }
@@ -378,13 +386,14 @@ private func parseExpandedBody(_ lines: [String], start: Int, depth: Int) throws
         let marker = String(content[content.index(after: sp)...])
 
         if marker.hasPrefix("=") {
-            let val = try scalarToAny(parseScalar(String(marker.dropFirst())))
+            let afterEq = marker.unicodeScalars.index(after: marker.unicodeScalars.startIndex)
+            let val = try scalarToAny(parseScalar(String(marker[afterEq...])))
             items.append(val)
             i += 1
             continue
         }
         if marker.hasPrefix("{}") {
-            var nested = NSMutableDictionary()
+            var nested = OrderedDictionary()
             i += 1
             let consumed = try parseObjectBody(lines, start: i, depth: depth + 1, out: &nested)
             items.append(nested)
