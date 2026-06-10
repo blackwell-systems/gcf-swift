@@ -1,7 +1,7 @@
 import Foundation
 
 /// Errors that can occur during GCF decoding.
-public enum DecodeError: Error, Equatable {
+public enum DecodeError: Error, Equatable, CustomStringConvertible {
     case emptyInput
     case invalidHeader(String)
     case missingTool
@@ -10,6 +10,21 @@ public enum DecodeError: Error, Equatable {
     case invalidScore(String)
     case invalidEdgeLine(String)
     case unknownEdgeID(String)
+    case malformedDelta(String)
+
+    public var description: String {
+        switch self {
+        case .emptyInput: return "missing_header: empty input"
+        case .invalidHeader(let h): return "missing_header: invalid header \(h)"
+        case .missingTool: return "missing_tool: header missing required 'tool' field"
+        case .invalidSymbolLine(let l): return "invalid_symbol_id: \(l)"
+        case .tooFewSymbolFields(let l): return "invalid_node_line: \(l)"
+        case .invalidScore(let s): return "invalid_score: \(s)"
+        case .invalidEdgeLine(let l): return "invalid_edge_syntax: \(l)"
+        case .unknownEdgeID(let l): return "unknown_edge_reference: \(l)"
+        case .malformedDelta(let s): return "malformed_delta: \(s)"
+        }
+    }
 }
 
 /// Decode parses GCF text back into a Payload.
@@ -31,6 +46,9 @@ public func decode(_ input: String) throws -> Payload {
         throw DecodeError.missingTool
     }
 
+    let isDelta = header.contains("delta=true")
+    let validDeltaSections: Set<String> = ["removed", "added", "edges_removed", "edges_added"]
+
     // Parse body: symbols and edges.
     var symbols: [Symbol] = []
     var symByID: [Int: Int] = [:] // symbol ID -> index in symbols array
@@ -50,6 +68,9 @@ public func decode(_ input: String) throws -> Payload {
             // Strip bracket suffix: "edges [200]" -> "edges"
             if let bracketIdx = group.range(of: " [") {
                 group = String(group[..<bracketIdx.lowerBound])
+            }
+            if isDelta && !validDeltaSections.contains(group) {
+                throw DecodeError.malformedDelta("invalid delta section \"\(group)\"")
             }
             inEdges = (group == "edges")
             if !inEdges {

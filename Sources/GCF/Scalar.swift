@@ -52,19 +52,21 @@ public func quoteString(_ s: String) -> String {
 
 public func formatScalar(_ value: Any?, delimiter: Character = "\0") -> String {
     guard let value = value else { return "-" }
-    if let b = value as? Bool { return b ? "true" : "false" }
-    if let i = value as? Int { return String(i) }
-    if let d = value as? Double { return formatNumber(d) }
+    if value is NSNull { return "-" }
+    // NSNumber: must check CFBoolean BEFORE Swift type bridging,
+    // because NSNumber(value: 1) bridges to both Bool and Int.
     if let n = value as? NSNumber {
-        // Check if it's boolean (NSNumber wraps Bool).
         if CFGetTypeID(n) == CFBooleanGetTypeID() {
             return n.boolValue ? "true" : "false"
         }
-        if n.objCType.pointee == 0x64 { // 'd' = double
+        let t = n.objCType.pointee
+        if t == 0x64 || t == 0x66 { // 'd' = double, 'f' = float
             return formatNumber(n.doubleValue)
         }
         return n.stringValue
     }
+    if let i = value as? Int { return String(i) }
+    if let d = value as? Double { return formatNumber(d) }
     let s = "\(value)"
     if needsQuote(s) || (delimiter != "\0" && s.contains(delimiter)) {
         return quoteString(s)
@@ -79,8 +81,16 @@ public func formatNumber(_ f: Double) -> String {
     }
     let a = abs(f)
     if a >= 1e-6 && a < 1e21 {
-        // Use String(f) for shortest round-trippable form.
         var s = "\(f)"
+        // Swift may use scientific notation; convert to plain decimal.
+        if s.contains("e") || s.contains("E") {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.groupingSeparator = ""
+            formatter.maximumFractionDigits = 20
+            formatter.minimumFractionDigits = 0
+            s = formatter.string(from: NSNumber(value: f)) ?? s
+        }
         // Strip trailing .0 for integer-valued floats.
         if s.hasSuffix(".0") && f == f.rounded(.towardZero) {
             s = String(s.dropLast(2))
