@@ -291,14 +291,14 @@ func deepEqual(_ a: Any, _ b: Any) -> Bool {
     // String.
     if let as_ = a as? String, let bs = b as? String { return as_ == bs }
 
-    // OrderedDictionary.
+    // OrderedDictionary (unordered comparison: tabular encoding normalizes
+    // key order to field declaration order, which may differ from insertion order).
     if let ad = a as? OrderedDictionary, let bd = b as? OrderedDictionary {
         let ap = ad.orderedPairs
-        let bp = bd.orderedPairs
-        if ap.count != bp.count { return false }
-        for i in 0..<ap.count {
-            if ap[i].0 != bp[i].0 { return false }
-            if !deepEqual(ap[i].1, bp[i].1) { return false }
+        if ap.count != bd.orderedPairs.count { return false }
+        for (k, v) in ap {
+            guard let bv = bd[k] else { return false }
+            if !deepEqual(v, bv) { return false }
         }
         return true
     }
