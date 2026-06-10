@@ -9,7 +9,7 @@ public func encodeDelta(_ delta: DeltaPayload) -> String {
     if delta.fullTokens > 0 {
         savings = 100.0 * (1.0 - Double(delta.deltaTokens) / Double(delta.fullTokens))
     }
-    b += "GCF tool=\(delta.tool) delta=true base_root=\(delta.baseRoot) new_root=\(delta.newRoot) tokens=\(delta.deltaTokens) savings=\(String(format: "%.0f", savings))%\n"
+    b += "GCF profile=graph tool=\(delta.tool) delta=true base_root=\(delta.baseRoot) new_root=\(delta.newRoot) tokens=\(delta.deltaTokens) savings=\(String(format: "%.0f", savings))%\n"
 
     // Removed symbols: short references (consumer already has the full declaration).
     if !delta.removed.isEmpty {

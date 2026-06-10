@@ -78,7 +78,7 @@ public class GenericStreamEncoder {
         writer.write("\(name)[\(values.count)]: \(parts.joined(separator: ","))\n")
     }
 
-    /// Emit the ## _summary trailer with final counts.
+    /// Emit the ##! summary trailer with final counts.
     public func close() {
         lock.lock()
         defer { lock.unlock() }
@@ -88,13 +88,8 @@ public class GenericStreamEncoder {
         }
         guard !sections.isEmpty else { return }
 
-        var totalRows = 0
-        var sectionParts: [String] = []
-        for s in sections {
-            sectionParts.append("\(s.name):\(s.count)")
-            totalRows += s.count
-        }
-        writer.write("## _summary rows=\(totalRows) sections=\(sectionParts.joined(separator: ","))\n")
+        let counts = sections.map { String($0.count) }
+        writer.write("##! summary counts=\(counts.joined(separator: ","))\n")
     }
 
     private func endArrayLocked() {

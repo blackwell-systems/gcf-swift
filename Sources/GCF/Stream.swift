@@ -36,7 +36,7 @@ public class StreamEncoder {
     public init(writer: StreamWriter, tool: String, options: StreamOptions = StreamOptions()) {
         self.writer = writer
 
-        var parts = ["GCF tool=\(tool)"]
+        var parts = ["GCF profile=graph tool=\(tool)"]
         if options.tokenBudget > 0 { parts.append("budget=\(options.tokenBudget)") }
         if options.tokensUsed > 0 { parts.append("tokens=\(options.tokensUsed)") }
         if !options.packRoot.isEmpty { parts.append("pack_root=\(options.packRoot)") }
@@ -116,16 +116,16 @@ public class StreamEncoder {
         }
     }
 
-    /// Emit ## _summary trailer with final counts.
+    /// Emit ##! summary trailer with final counts.
     public func close() {
         lock.lock()
         defer { lock.unlock() }
 
-        var sections: [String] = groupCounts.filter { $0.1 > 0 }.map { "\($0.0):\($0.1)" }
+        var counts: [String] = groupCounts.filter { $0.1 > 0 }.map { String($0.1) }
         if edgeCount > 0 {
-            sections.append("edges:\(edgeCount)")
+            counts.append(String(edgeCount))
         }
-        writer.write("## _summary symbols=\(nextID) edges=\(edgeCount) sections=\(sections.joined(separator: ","))\n")
+        writer.write("##! summary symbols=\(nextID) edges=\(edgeCount) counts=\(counts.joined(separator: ","))\n")
     }
 
     /// Number of symbols written so far.

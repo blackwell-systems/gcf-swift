@@ -41,6 +41,9 @@ public func decode(_ input: String) throws -> Payload {
         let trimmed = line.hasSuffix("\r") ? String(line.dropLast()) : line
         if trimmed.isEmpty { continue }
 
+        // Skip ##! summary trailer.
+        if trimmed.hasPrefix("##! ") { continue }
+
         // Group header.
         if trimmed.hasPrefix("## ") {
             var group = String(trimmed.dropFirst(3))

@@ -14,7 +14,7 @@ public func encode(_ payload: Payload) -> String {
     let validEdges = payload.edges.filter { symIndex[$0.source] != nil && symIndex[$0.target] != nil }.count
 
     // Header line.
-    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges)"
+    b += "GCF profile=graph tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges)"
     if !payload.packRoot.isEmpty {
         b += " pack_root=\(payload.packRoot)"
     }

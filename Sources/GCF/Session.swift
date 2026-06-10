@@ -77,7 +77,7 @@ public func encodeWithSession(_ payload: Payload, session: Session?) -> String {
     let validEdges = payload.edges.filter { localIndex[$0.source] != nil && localIndex[$0.target] != nil }.count
 
     // Header with session=true marker.
-    b += "GCF tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges) session=true"
+    b += "GCF profile=graph tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges) session=true"
     if !payload.packRoot.isEmpty {
         b += " pack_root=\(payload.packRoot)"
     }
