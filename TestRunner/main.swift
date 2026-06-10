@@ -624,6 +624,27 @@ func printDiff(_ a: Any, _ b: Any, path: String) {
     print("    \(path): \(type(of: a))(\(valueToJSON(a))) vs \(type(of: b))(\(valueToJSON(b)))")
 }
 
+// Regression: iteration 9265021 from 50M adversarial run
+section("Regression: quoted pipe in tabular cell")
+let regVal: [Any] = [OrderedDictionary([
+    ("a\\5H| \",\t\n\t|\"\n\u{0624}", OrderedDictionary() as Any),
+    ("cwqwid", "\\==J\"||J#\u{054F}\u{0DEB}t" as Any),
+    ("dforf", "^" as Any),
+])]
+let regGCF = encodeGeneric(regVal)
+do {
+    let regDec = try decodeGeneric(regGCF)
+    if deepEqual(regVal, regDec) {
+        passed += 1; print("  regression OK")
+    } else {
+        failed += 1; print("  FAIL: round-trip mismatch")
+        printDiff(regVal, regDec, path: "$")
+    }
+} catch {
+    failed += 1; print("  FAIL: \(error)")
+    print("  gcf: \(regGCF.debugDescription)")
+}
+
 let iterations = getIterations()
 
 section("Property Round-Trip (\(iterations) random)")

@@ -5,7 +5,7 @@
 - `OrderedDictionary`: insertion-order-preserving dictionary for conformance-grade round-trips
 - `decodeGeneric` now returns `OrderedDictionary` instead of `NSMutableDictionary`
 - `encodeGeneric` accepts `OrderedDictionary` input (preserves key order)
-- Property-based round-trip tests: 10M random + adversarial values, zero failures
+- Property-based round-trip tests: 50M values (25M random zero failures, 25M adversarial 2 edge cases at 99.999992%)
 - Fix: number precision loss in exponent notation (`%e` replaced with shortest-exact representation)
 - Fix: Unicode combining marks (Mn/Mc/Me) merging with delimiters in grapheme clustering
 - Fix: `splitRespectingQuotes` rewritten to operate on unicode scalars, not grapheme clusters
