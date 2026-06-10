@@ -14,6 +14,7 @@ let package = Package(
     targets: [
         .target(name: "GCF"),
         .testTarget(name: "GCFTests", dependencies: ["GCF"]),
+        .executableTarget(name: "GCFCLI", dependencies: ["GCF"]),
         .executableTarget(name: "RunTests", dependencies: ["GCF"], path: "TestRunner"),
     ]
 )

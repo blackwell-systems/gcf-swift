@@ -2,6 +2,7 @@
 
 ## v1.0.1 (2026-06-10)
 
+- CLI: `GCFCLI` executable with `encode`, `decode`, `encode-generic`, `decode-generic` subcommands
 - `OrderedDictionary`: insertion-order-preserving dictionary for conformance-grade round-trips
 - `decodeGeneric` now returns `OrderedDictionary` instead of `NSMutableDictionary`
 - `encodeGeneric` accepts `OrderedDictionary` input (preserves key order)
