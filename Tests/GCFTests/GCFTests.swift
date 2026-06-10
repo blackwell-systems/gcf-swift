@@ -15,7 +15,7 @@ final class GCFTests: XCTestCase {
             edges: [Edge(source: "pkg.NewServer", target: "pkg.AuthMiddleware", edgeType: "calls")]
         )
         let output = encode(p)
-        XCTAssertTrue(output.hasPrefix("GCF tool=context_for_task budget=5000 tokens=1847 symbols=2"))
+        XCTAssertTrue(output.hasPrefix("GCF profile=graph tool=context_for_task budget=5000 tokens=1847 symbols=2"))
         XCTAssertTrue(output.contains("## targets"))
         XCTAssertTrue(output.contains("@0 fn pkg.AuthMiddleware 0.78 lsp_resolved"))
         XCTAssertTrue(output.contains("## related"))
