@@ -414,9 +414,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             while i < lines.count && attachmentValues.count < allAttFields.count {
                 let aLine = lines[i]
                 let aContent: String?
-                if aLine.hasPrefix(ind + "  ") {
-                    aContent = String(aLine.dropFirst(ind.count + 2))
-                } else if depth == 0 || aLine.hasPrefix(ind) {
+                if depth == 0 || aLine.hasPrefix(ind) {
                     aContent = depth > 0 ? String(aLine.dropFirst(ind.count)) : aLine
                 } else {
                     break
