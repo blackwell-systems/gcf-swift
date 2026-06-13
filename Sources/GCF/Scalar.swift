@@ -19,7 +19,7 @@ public func needsQuote(_ s: String) -> Bool {
     if jsonNumberPattern.firstMatch(in: s, range: range) != nil { return true }
     if numericLikePattern.firstMatch(in: s, range: range) != nil { return true }
     if s.first == " " || s.last == " " { return true }
-    if s.first == "#" || s.first == "@" { return true }
+    if s.first == "#" || s.first == "@" || s.first == "." { return true }
     for c in s.unicodeScalars {
         if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
             || c == "\n" || c == "\r" { return true }
@@ -149,6 +149,7 @@ public enum ScalarResult {
     case string(String)
     case missing
     case attachment
+    case inlineAttachment(String)
 }
 
 public func parseScalar(_ s: String, tabularContext: Bool = false) throws -> ScalarResult {
@@ -159,9 +160,10 @@ public func parseScalar(_ s: String, tabularContext: Bool = false) throws -> Sca
         if !tabularContext { throw GCFError.invalidMissing }
         return .missing
     }
-    if s == "^" {
+    if s == "^" || (s.hasPrefix("^{") && s.hasSuffix("}")) {
         if !tabularContext { throw GCFError.invalidAttachment }
-        return .attachment
+        if s == "^" { return .attachment }
+        return .inlineAttachment(String(s.dropFirst(1)))
     }
     if s == "true" { return .bool(true) }
     if s == "false" { return .bool(false) }

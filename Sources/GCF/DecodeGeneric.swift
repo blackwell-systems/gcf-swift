@@ -1,6 +1,6 @@
 import Foundation
 
-/// Decode GCF v2.0 generic or graph profile text into a value tree.
+/// Decode GCF generic or graph profile text into a value tree.
 public func decodeGeneric(_ input: String) throws -> Any {
     let trimmed = input.trimmingCharacters(in: CharacterSet(charactersIn: "\n\r"))
     if trimmed.isEmpty { throw GCFError.missingHeader }
@@ -89,6 +89,7 @@ private func scalarToAny(_ sv: ScalarResult) throws -> Any {
     case .string(let s): return s
     case .missing: throw GCFError.invalidMissing
     case .attachment: throw GCFError.invalidAttachment
+    case .inlineAttachment: throw GCFError.invalidAttachment
     }
 }
 
@@ -238,11 +239,108 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
     return (items, consumed + 1)
 }
 
+private func parseAttachmentName(_ rest: String) -> (String, String) {
+    if rest.unicodeScalars.first == "\"" {
+        // Iterate over unicode scalars to avoid grapheme clustering merging
+        // non-ASCII characters with adjacent delimiters like ".
+        let scalars = Array(rest.unicodeScalars)
+        var j = 1
+        while j < scalars.count {
+            if scalars[j] == "\\" { j += 2; continue }
+            if scalars[j] == "\"" {
+                // Build the quoted portion and remainder from scalar offsets.
+                let quoted = String(String.UnicodeScalarView(scalars[0...j]))
+                let remainder = String(String.UnicodeScalarView(scalars[(j+1)...]))
+                if let name = try? parseQuotedString(quoted) {
+                    return (name, remainder)
+                }
+                break
+            }
+            j += 1
+        }
+        return ("", rest)
+    }
+    if let sp = rest.firstIndex(of: " ") {
+        return (String(rest[rest.startIndex..<sp]), String(rest[sp...]))
+    }
+    return (rest, "")
+}
+
+private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, depth: Int,
+                               sharedSchemas: inout [String: [String]]) throws -> (String, Any, Int, [String]?) {
+    let (name, afterNameRaw) = parseAttachmentName(rest)
+    if name.isEmpty && !rest.hasPrefix("\"\"") { throw GCFError.invalidFieldDeclaration("invalid attachment: \(rest)") }
+    let afterName = afterNameRaw.trimmingCharacters(in: CharacterSet(charactersIn: " "))
+
+    if afterName.hasPrefix("{}") {
+        var nested = OrderedDictionary()
+        let consumed = try parseObjectBody(lines, start: lineIdx + 1, depth: depth, out: &nested)
+        return (name, nested, consumed + 1, nil)
+    }
+    if afterName.hasPrefix("[") {
+        guard let cb = afterName.firstIndex(of: "]") else { throw GCFError.invalidFieldDeclaration("missing ]") }
+        let afterClose = String(afterName[afterName.index(after: cb)...])
+
+        if afterClose.hasPrefix("{") {
+            var parsedFields: [String]? = nil
+            if let eb = findClosingBraceSwift(afterClose) {
+                parsedFields = try? splitFieldDecl(String(afterClose[afterClose.startIndex...afterClose.index(afterClose.startIndex, offsetBy: eb)]))
+            }
+            let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
+            return (name, arr, consumed, parsedFields)
+        }
+
+        // Inline primitive array.
+        if afterClose.hasPrefix(": ") || afterClose == ":" {
+            let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
+            return (name, arr, consumed, nil)
+        }
+
+        // Shared schema.
+        if let sf = sharedSchemas[name] {
+            let countStr = String(afterName[afterName.index(after: afterName.startIndex)..<cb])
+            let count = countStr == "?" ? -1 : (Int(countStr) ?? -1)
+            if count == 0 { return (name, [Any](), 1, nil) }
+            var useShared = true
+            let ind = String(repeating: "  ", count: depth)
+            let nextIdx = lineIdx + 1
+            if nextIdx < lines.count {
+                var nc = lines[nextIdx]
+                if depth > 0 && nc.hasPrefix(ind) { nc = String(nc.dropFirst(ind.count)) }
+                if nc.trimmingCharacters(in: CharacterSet(charactersIn: " ")).hasPrefix("@") { useShared = false }
+            }
+            if useShared {
+                let (rows, consumed) = try parseTabularBody(lines, start: lineIdx + 1, depth: depth, fields: sf, expectedCount: count)
+                if count >= 0 && rows.count != count { throw GCFError.countMismatch(count, rows.count) }
+                return (name, rows, consumed + 1, nil)
+            }
+        }
+
+        let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
+        return (name, arr, consumed, nil)
+    }
+    throw GCFError.invalidFieldDeclaration("invalid attachment form: \(afterName)")
+}
+
+private func findClosingBraceSwift(_ s: String) -> Int? {
+    var inQuote = false; var escaped = false; var idx = 0
+    for c in s {
+        if escaped { escaped = false; idx += 1; continue }
+        if c == "\\" && inQuote { escaped = true; idx += 1; continue }
+        if c == "\"" { inQuote = !inQuote; idx += 1; continue }
+        if c == "}" && !inQuote { return idx }
+        idx += 1
+    }
+    return nil
+}
+
 private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                                fields: [String], expectedCount: Int) throws -> ([Any], Int) {
     let ind = String(repeating: "  ", count: depth)
     var rows: [Any] = []
     var i = start
+    var inlineSchemas: [String: [String]] = [:]
+    var sharedArraySchemas: [String: [String]] = [:]
 
     while i < lines.count {
         let line = lines[i]
@@ -256,7 +354,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         if content.hasPrefix("## ") || content.hasPrefix("##!") { break }
         if !content.isEmpty && content.first == " " {
             let trimmed = content.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix(".") { throw GCFError.orphanAttachment(trimmed) }
+            if trimmed.hasPrefix(".") { break }
             break
         }
 
@@ -264,8 +362,11 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         var rowHasID = false
         if rowData.hasPrefix("@") {
             if let sp = rowData.firstIndex(of: " ") {
-                rowData = String(rowData[rowData.index(after: sp)...])
-                rowHasID = true
+                let idStr = String(rowData[rowData.index(after: rowData.startIndex)..<sp])
+                if !idStr.isEmpty && idStr.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                    rowData = String(rowData[rowData.index(after: sp)...])
+                    rowHasID = true
+                }
             }
         }
 
@@ -273,39 +374,109 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         if vals.count != fields.count { throw GCFError.rowWidthMismatch(fields.count, vals.count) }
 
         let cellValues = OrderedDictionary()
-        var attachmentFields: [String] = []
+        var traditionalAttFields: [String] = []
+        var inlineAttFields: [String] = []
+        var inlineAttOrder: [String] = []
         var missingFields = Set<String>()
+
         for (j, f) in fields.enumerated() {
-            let parsed = try parseScalar(vals[j], tabularContext: true)
+            let cellVal = vals[j]
+            if cellVal.hasPrefix("^{") && cellVal.hasSuffix("}") {
+                let schemaStr = String(cellVal.dropFirst(1))
+                let ifs = try splitFieldDecl(schemaStr)
+                inlineSchemas[f] = ifs
+                inlineAttFields.append(f)
+                inlineAttOrder.append(f)
+                continue
+            }
+            let parsed = try parseScalar(cellVal, tabularContext: true)
             switch parsed {
             case .missing: missingFields.insert(f)
-            case .attachment: attachmentFields.append(f)
+            case .attachment:
+                if inlineSchemas[f] != nil { inlineAttFields.append(f); inlineAttOrder.append(f) }
+                else { traditionalAttFields.append(f) }
+            case .inlineAttachment(let schema):
+                let ifs = try splitFieldDecl(schema)
+                inlineSchemas[f] = ifs
+                inlineAttFields.append(f)
+                inlineAttOrder.append(f)
             default: cellValues[f] = try scalarToAny(parsed)
             }
         }
         i += 1
 
-        // Parse attachments.
+        let allAttFields = traditionalAttFields + inlineAttFields
         let attachmentValues = OrderedDictionary()
-        if rowHasID && !attachmentFields.isEmpty {
-            let attIndent = ind + "  "
-            while i < lines.count {
-                let al = lines[i]
-                guard al.hasPrefix(attIndent) else { break }
-                let ac = String(al.dropFirst(attIndent.count))
-                guard ac.hasPrefix(".") else { break }
-                let (name, val, consumed) = try parseAttachment(lines, lineIdx: i, rest: String(ac.dropFirst()), depth: depth + 2)
-                if attachmentValues[name] != nil { throw GCFError.duplicateAttachment(name) }
-                attachmentValues[name] = val
-                i += consumed
+
+        if rowHasID && !allAttFields.isEmpty {
+            var inlineIdx = 0
+
+            while i < lines.count && attachmentValues.count < allAttFields.count {
+                let aLine = lines[i]
+                let aContent: String?
+                if aLine.hasPrefix(ind + "  ") {
+                    aContent = String(aLine.dropFirst(ind.count + 2))
+                } else if depth == 0 || aLine.hasPrefix(ind) {
+                    aContent = depth > 0 ? String(aLine.dropFirst(ind.count)) : aLine
+                } else {
+                    break
+                }
+                guard let ac = aContent else { break }
+
+                if ac.hasPrefix(".") {
+                    let rest = String(ac.dropFirst())
+                    let (attName, afterNameR) = parseAttachmentName(rest)
+                    let afterNameS = afterNameR.trimmingCharacters(in: CharacterSet(charactersIn: " "))
+
+                    if let ifs = inlineSchemas[attName], !afterNameS.hasPrefix("{}"), !afterNameS.hasPrefix("[") {
+                        let inlineVals = splitRespectingQuotes(afterNameS, delimiter: "|")
+                        if inlineVals.count != ifs.count { throw GCFError.rowWidthMismatch(ifs.count, inlineVals.count) }
+                        let obj = OrderedDictionary()
+                        for (k, inf) in ifs.enumerated() {
+                            let p = try parseScalar(inlineVals[k], tabularContext: true)
+                            if case .missing = p { continue }
+                            obj[inf] = try scalarToAny(p)
+                        }
+                        attachmentValues[attName] = obj
+                        i += 1; continue
+                    }
+
+                    let (attNameT, attVal, consumed, parsedFields) = try parseAttachment(lines, lineIdx: i, rest: rest, depth: depth + 2, sharedSchemas: &sharedArraySchemas)
+                    if rows.isEmpty, let pf = parsedFields { sharedArraySchemas[attNameT] = pf }
+                    attachmentValues[attNameT] = attVal
+                    i += consumed; continue
+                }
+
+                // No-prefix: positional inline data.
+                var foundInline = false
+                var nextInlineField = ""
+                while inlineIdx < inlineAttOrder.count {
+                    let candidate = inlineAttOrder[inlineIdx]
+                    if attachmentValues[candidate] == nil { nextInlineField = candidate; foundInline = true; break }
+                    inlineIdx += 1
+                }
+                if !foundInline { break }
+
+                let ifs = inlineSchemas[nextInlineField]!
+                let inlineVals = splitRespectingQuotes(ac, delimiter: "|")
+                if inlineVals.count != ifs.count { throw GCFError.rowWidthMismatch(ifs.count, inlineVals.count) }
+                let obj = OrderedDictionary()
+                for (k, inf) in ifs.enumerated() {
+                    let p = try parseScalar(inlineVals[k], tabularContext: true)
+                    if case .missing = p { continue }
+                    obj[inf] = try scalarToAny(p)
+                }
+                attachmentValues[nextInlineField] = obj
+                inlineIdx += 1; i += 1
             }
-            for f in attachmentFields {
+
+            for f in allAttFields {
                 if attachmentValues[f] == nil { throw GCFError.missingAttachment(f) }
             }
         }
 
         // Orphan check.
-        if !rowHasID || attachmentFields.isEmpty {
+        if !rowHasID || allAttFields.isEmpty {
             let attIndent = ind + "  "
             if i < lines.count && lines[i].hasPrefix(attIndent) {
                 let peek = String(lines[i].dropFirst(attIndent.count))

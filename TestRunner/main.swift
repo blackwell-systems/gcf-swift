@@ -645,6 +645,29 @@ do {
     print("  gcf: \(regGCF.debugDescription)")
 }
 
+// Regression: iteration 10797048 from 20M adversarial run
+section("Regression: quoted attachment name with non-ASCII")
+let regVal2: [Any] = [OrderedDictionary([
+    ("1e10", true as Any),
+    ("jirbg", NSNull() as Any),
+    ("\n\u{061E}#\t,#\\,o,,e\n\t,\"#\" ", 5.13e-08 as Any),
+    ("az", true as Any),
+    ("\t\n= j|\\#\\#\\g #,0\u{08E2}", [537615.2478355657, "\u{089B}=Nu@\ndr|\n|| K"] as [Any] as Any),
+])]
+let regGCF2 = encodeGeneric(regVal2)
+print("  encoded: \(regGCF2.debugDescription)")
+do {
+    let regDec2 = try decodeGeneric(regGCF2)
+    if deepEqual(regVal2, regDec2) {
+        passed += 1; print("  regression OK")
+    } else {
+        failed += 1; print("  FAIL: round-trip mismatch")
+        printDiff(regVal2, regDec2, path: "$")
+    }
+} catch {
+    failed += 1; print("  FAIL: \(error)")
+}
+
 let iterations = getIterations()
 
 section("Property Round-Trip (\(iterations) random)")
