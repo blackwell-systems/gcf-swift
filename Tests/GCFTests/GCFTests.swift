@@ -87,7 +87,7 @@ final class GCFTests: XCTestCase {
         XCTAssertEqual(p.symbols.count, 1)
     }
 
-    func testDecodeErrors() {
+    func testDecodeErrors() throws {
         XCTAssertThrowsError(try decode("NOTGCF tool=test"))
         // v3.1: tool field is optional, so missing tool should succeed
         let noTool = try decode("GCF profile=graph budget=100 tokens=50 symbols=0")
