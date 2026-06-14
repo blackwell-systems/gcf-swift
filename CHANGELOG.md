@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.1.0 (2026-06-14)
+
+### Spec v3.1
+
+- `tool` field in graph profile header is now optional (SHOULD be present for MCP, not required)
+- Removed `missingTool` case from `DecodeError` enum
+
+### Bug Fixes
+
+- Quote strings containing commas (conformance: `inline-schema/006_inline_with_quoted_values`)
+- Decode v2-format indented attachments in tabular rows (conformance: `decode/002_attachment`)
+- Reject duplicate attachments on the same row (conformance: `errors-v2/027_duplicate_attachment`)
+- Reject orphan attachments on rows without `^` cells (conformance: `errors-v2/016_orphan_attachment`)
+
 ## v2.0.0 (2026-06-12)
 
 ### Breaking Changes

@@ -419,11 +419,25 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                 } else {
                     break
                 }
-                guard let ac = aContent else { break }
+                guard var ac = aContent else { break }
+
+                // Handle v2 indented attachments: strip one extra indent level.
+                if !ac.hasPrefix(".") && ac.hasPrefix("  .") {
+                    ac = String(ac.dropFirst(2))
+                }
 
                 if ac.hasPrefix(".") {
                     let rest = String(ac.dropFirst())
                     let (attName, afterNameR) = parseAttachmentName(rest)
+
+                    // Check for orphan attachment.
+                    if !allAttFields.contains(attName) {
+                        throw GCFError.orphanAttachment(attName)
+                    }
+                    // Check for duplicate attachment.
+                    if attachmentValues[attName] != nil {
+                        throw GCFError.duplicateAttachment(attName)
+                    }
                     let afterNameS = afterNameR.trimmingCharacters(in: CharacterSet(charactersIn: " "))
 
                     if let ifs = inlineSchemas[attName], !afterNameS.hasPrefix("{}"), !afterNameS.hasPrefix("[") {
@@ -471,14 +485,49 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             for f in allAttFields {
                 if attachmentValues[f] == nil { throw GCFError.missingAttachment(f) }
             }
+
+            // Check for extra attachment lines after all fields resolved (duplicate).
+            if i < lines.count {
+                let extraLine = lines[i]
+                var extraContent = ""
+                if depth == 0 || extraLine.hasPrefix(ind) {
+                    extraContent = depth > 0 ? String(extraLine.dropFirst(ind.count)) : extraLine
+                }
+                // Handle v2 indented format.
+                if !extraContent.hasPrefix(".") && extraContent.hasPrefix("  .") {
+                    extraContent = String(extraContent.dropFirst(2))
+                }
+                if extraContent.hasPrefix(".") {
+                    let (extraName, _) = parseAttachmentName(String(extraContent.dropFirst()))
+                    if attachmentValues[extraName] != nil {
+                        throw GCFError.duplicateAttachment(extraName)
+                    }
+                }
+            }
         }
 
         // Orphan check.
         if !rowHasID || allAttFields.isEmpty {
-            let attIndent = ind + "  "
-            if i < lines.count && lines[i].hasPrefix(attIndent) {
-                let peek = String(lines[i].dropFirst(attIndent.count))
-                if peek.hasPrefix(".") { throw GCFError.orphanAttachment(peek) }
+            if i < lines.count {
+                let peekLine = lines[i]
+                let peekContent: String
+                if depth > 0 && peekLine.hasPrefix(ind) {
+                    peekContent = String(peekLine.dropFirst(ind.count))
+                } else if depth == 0 {
+                    peekContent = peekLine
+                } else {
+                    peekContent = ""
+                }
+                // Check both v3 (no indent) and v2 (indented) attachment lines.
+                if peekContent.hasPrefix(".") {
+                    let (name, _) = parseAttachmentName(String(peekContent.dropFirst()))
+                    throw GCFError.orphanAttachment(name)
+                }
+                if peekContent.hasPrefix("  .") {
+                    let trimmed = String(peekContent.dropFirst(2))
+                    let (name, _) = parseAttachmentName(String(trimmed.dropFirst()))
+                    throw GCFError.orphanAttachment(name)
+                }
             }
         }
 

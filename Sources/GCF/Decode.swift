@@ -4,7 +4,6 @@ import Foundation
 public enum DecodeError: Error, Equatable, CustomStringConvertible {
     case emptyInput
     case invalidHeader(String)
-    case missingTool
     case invalidSymbolLine(String)
     case tooFewSymbolFields(String)
     case invalidScore(String)
@@ -16,7 +15,6 @@ public enum DecodeError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .emptyInput: return "missing_header: empty input"
         case .invalidHeader(let h): return "missing_header: invalid header \(h)"
-        case .missingTool: return "missing_tool: header missing required 'tool' field"
         case .invalidSymbolLine(let l): return "invalid_symbol_id: \(l)"
         case .tooFewSymbolFields(let l): return "invalid_node_line: \(l)"
         case .invalidScore(let s): return "invalid_score: \(s)"
@@ -42,9 +40,7 @@ public func decode(_ input: String) throws -> Payload {
         throw DecodeError.invalidHeader(header)
     }
     parseHeader(String(header.dropFirst(4)), &p)
-    guard !p.tool.isEmpty else {
-        throw DecodeError.missingTool
-    }
+    // v3.1: tool field is optional (SHOULD be present for MCP tool responses, not required).
 
     let isDelta = header.contains("delta=true")
     let validDeltaSections: Set<String> = ["removed", "added", "edges_removed", "edges_added"]

@@ -21,7 +21,7 @@ public func needsQuote(_ s: String) -> Bool {
     if s.first == " " || s.last == " " { return true }
     if s.first == "#" || s.first == "@" || s.first == "." { return true }
     for c in s.unicodeScalars {
-        if c == "\"" || c == "\\" || c == "|" || c.value < 0x20
+        if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
             || c == "\n" || c == "\r" { return true }
         // Quote any non-ASCII character. Swift's grapheme clustering can merge
         // non-ASCII characters (combining marks, Thai vowels, etc.) with adjacent
