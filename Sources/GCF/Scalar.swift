@@ -11,6 +11,9 @@ private let numericLikePattern = try! NSRegularExpression(
 private let bareKeyPattern = try! NSRegularExpression(
     pattern: "\\A[a-zA-Z_][a-zA-Z0-9_]*\\z"
 )
+private let inlineArrayPattern = try! NSRegularExpression(
+    pattern: "\\[[^\\]]*\\]\\s*:"
+)
 
 public func needsQuote(_ s: String) -> Bool {
     if s.isEmpty { return true }
@@ -20,6 +23,7 @@ public func needsQuote(_ s: String) -> Bool {
     if numericLikePattern.firstMatch(in: s, range: range) != nil { return true }
     if s.first == " " || s.last == " " { return true }
     if s.first == "#" || s.first == "@" || s.first == "." { return true }
+    if inlineArrayPattern.firstMatch(in: s, range: range) != nil { return true }
     for c in s.unicodeScalars {
         if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
             || c == "\n" || c == "\r" { return true }

@@ -127,7 +127,19 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
             continue
         }
 
-        // Inline array.
+        // Key=value. Check before inline array so bracket patterns in quoted
+        // values (e.g. text="ERR[404]: Not Found") are not misinterpreted.
+        if let eqIdx = findKVSplit(content), eqIdx > content.startIndex {
+            let name = try parseKeyFromHeader(String(content[content.startIndex..<eqIdx]))
+            try checkDup(out, key: name)
+            let afterEq = content.unicodeScalars.index(after: eqIdx)
+            let val = try scalarToAny(parseScalar(String(content[afterEq...])))
+            out[name] = val
+            i += 1
+            continue
+        }
+
+        // Inline array (e.g. items[3]: a,b,c). Only reached if no = found.
         if !content.hasPrefix("@") && !content.hasPrefix("##") {
             if let bracketIdx = content.firstIndex(of: "["), bracketIdx > content.startIndex {
                 let rest = String(content[bracketIdx...])
@@ -143,17 +155,6 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
                     }
                 }
             }
-        }
-
-        // Key=value.
-        if let eqIdx = findKVSplit(content), eqIdx > content.startIndex {
-            let name = try parseKeyFromHeader(String(content[content.startIndex..<eqIdx]))
-            try checkDup(out, key: name)
-            let afterEq = content.unicodeScalars.index(after: eqIdx)
-            let val = try scalarToAny(parseScalar(String(content[afterEq...])))
-            out[name] = val
-            i += 1
-            continue
         }
 
         i += 1
@@ -177,9 +178,11 @@ private func findKVSplit(_ s: String) -> String.Index? {
         }
         return nil
     }
-    // Find first unquoted '=' using scalar view.
+    // Find first '=' but only before any '[' (to avoid matching = inside inline array values).
+    var bracketSeen = false
     for i in scalars.indices {
-        if scalars[i] == "=" { return i }
+        if scalars[i] == "[" { bracketSeen = true }
+        if scalars[i] == "=" { return bracketSeen ? nil : i }
     }
     return nil
 }
