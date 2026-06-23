@@ -79,7 +79,7 @@ func genString(_ rng: inout SeededRNG) -> String {
     let n = rng.nextInt(20)
     var s = ""
     for _ in 0..<n {
-        switch rng.nextInt(15) {
+        switch rng.nextInt(16) {
         case 0: s += " "
         case 1: s += String(Character(UnicodeScalar(Int(UnicodeScalar("a").value) + rng.nextInt(26))!))
         case 2: s += String(Character(UnicodeScalar(Int(UnicodeScalar("A").value) + rng.nextInt(26))!))
@@ -94,6 +94,7 @@ func genString(_ rng: inout SeededRNG) -> String {
         case 11: s += String(Character(UnicodeScalar(0x100 + rng.nextInt(0x1000))!))
         case 12: s += "#"
         case 13: s += "@"
+        case 14: s += ">"
         default: s += String(Character(UnicodeScalar(Int(UnicodeScalar("a").value) + rng.nextInt(26))!))
         }
     }
@@ -367,22 +368,26 @@ final class RoundTripTests: XCTestCase {
 
         for i in 0..<iterations {
             let val = genValue(&rng, depth: 0, maxDepth: 4)
-            let gcfText = encodeGeneric(val)
+            for noFlatten in [false, true] {
+                let gcfText = encodeGeneric(val, opts: GenericOptions(noFlatten: noFlatten))
 
-            XCTAssertTrue(gcfText.hasPrefix("GCF profile=generic\n"),
-                          "iteration \(i): missing header")
+                if !noFlatten {
+                    XCTAssertTrue(gcfText.hasPrefix("GCF profile=generic\n"),
+                                  "iteration \(i): missing header")
+                }
 
-            let decoded: Any
-            do {
-                decoded = try decodeGeneric(gcfText)
-            } catch {
-                XCTFail("iteration \(i): decode failed: \(error)\n  input: \(valueToJSON(val))\n  gcf: \(String(gcfText.prefix(500)))")
-                return
-            }
+                let decoded: Any
+                do {
+                    decoded = try decodeGeneric(gcfText)
+                } catch {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): decode failed: \(error)\n  input: \(valueToJSON(val))\n  gcf: \(String(gcfText.prefix(500)))")
+                    return
+                }
 
-            if !deepEqual(val, decoded) {
-                XCTFail("iteration \(i): round-trip mismatch\n  input:   \(valueToJSON(val))\n  gcf:     \(String(gcfText.prefix(500)))\n  decoded: \(valueToJSON(decoded))")
-                return
+                if !deepEqual(val, decoded) {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): round-trip mismatch\n  input:   \(valueToJSON(val))\n  gcf:     \(String(gcfText.prefix(500)))\n  decoded: \(valueToJSON(decoded))")
+                    return
+                }
             }
         }
         print("PASS: \(iterations) random values round-tripped successfully")
@@ -394,19 +399,21 @@ final class RoundTripTests: XCTestCase {
 
         for i in 0..<iterations {
             let val = genAdversarialValue(&rng, depth: 0, maxDepth: 3)
-            let gcfText = encodeGeneric(val)
+            for noFlatten in [false, true] {
+                let gcfText = encodeGeneric(val, opts: GenericOptions(noFlatten: noFlatten))
 
-            let decoded: Any
-            do {
-                decoded = try decodeGeneric(gcfText)
-            } catch {
-                XCTFail("iteration \(i): decode failed: \(error)\n  input: \(valueToJSON(val))\n  gcf: \(String(gcfText.prefix(500)))")
-                return
-            }
+                let decoded: Any
+                do {
+                    decoded = try decodeGeneric(gcfText)
+                } catch {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): decode failed: \(error)\n  input: \(valueToJSON(val))\n  gcf: \(String(gcfText.prefix(500)))")
+                    return
+                }
 
-            if !deepEqual(val, decoded) {
-                XCTFail("iteration \(i): round-trip mismatch\n  input:   \(valueToJSON(val))\n  gcf:     \(String(gcfText.prefix(500)))\n  decoded: \(valueToJSON(decoded))")
-                return
+                if !deepEqual(val, decoded) {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): round-trip mismatch\n  input:   \(valueToJSON(val))\n  gcf:     \(String(gcfText.prefix(500)))\n  decoded: \(valueToJSON(decoded))")
+                    return
+                }
             }
         }
         print("PASS: \(iterations) adversarial values round-tripped successfully")
