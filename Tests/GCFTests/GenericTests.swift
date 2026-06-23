@@ -51,9 +51,20 @@ final class GenericTests: XCTestCase {
         }
     }
 
+    /// Convert OrderedDictionary to NSDictionary for JSONSerialization.
+    private func toSerializable(_ v: Any) -> Any {
+        if let od = v as? OrderedDictionary {
+            let dict = NSMutableDictionary()
+            for (k, val) in od.orderedPairs { dict[k] = toSerializable(val) }
+            return dict
+        }
+        if let arr = v as? [Any] { return arr.map { toSerializable($0) } }
+        return v
+    }
+
     /// Normalize through JSON for comparison (handles key ordering, NSNull, etc).
     private func jsonNormalize(_ v: Any) -> String {
-        let data = try! JSONSerialization.data(withJSONObject: v, options: [.sortedKeys])
+        let data = try! JSONSerialization.data(withJSONObject: toSerializable(v), options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
     }
 }
