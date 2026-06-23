@@ -29,6 +29,16 @@ func checkEqual<T: Equatable>(_ a: T, _ b: T, _ message: String, file: String = 
 
 func section(_ name: String) { print("--- \(name) ---") }
 
+func serializableValue(_ v: Any) -> Any {
+    if let od = v as? OrderedDictionary {
+        let dict = NSMutableDictionary()
+        for (k, val) in od.orderedPairs { dict[k] = serializableValue(val) }
+        return dict
+    }
+    if let arr = v as? [Any] { return arr.map { serializableValue($0) } }
+    return v
+}
+
 // MARK: - Seeded PRNG
 
 struct SeededRNG {
@@ -747,6 +757,53 @@ do {
     } else {
         failed += 1
         print("  \(rtFailed)/\(iterations) adversarial round-trips failed")
+    }
+}
+
+// MARK: - Flatten opt-out and > edge cases
+
+section("Flatten opt-out")
+do {
+    let data: [String: Any] = [
+        "orders": [
+            ["id": "ORD-1", "customer": ["name": "Alice", "email": "alice@co.com"] as [String: Any], "total": 99.99] as [String: Any],
+            ["id": "ORD-2", "customer": ["name": "Bob", "email": "bob@co.com"] as [String: Any], "total": 49.99] as [String: Any],
+        ]
+    ]
+    let withFlatten = encodeGeneric(data)
+    check(withFlatten.contains("customer>"), "default should have path columns")
+    let noFlatten = encodeGeneric(data, opts: GenericOptions(noFlatten: true))
+    check(!noFlatten.contains("customer>"), "noFlatten should not have path columns")
+    check(noFlatten.contains(".customer"), "noFlatten should have attachment syntax")
+}
+
+section("> field edge cases")
+do {
+    let cases: [(String, Any)] = [
+        ("literal > key", [[">": 1], [">": 2]] as [[String: Any]]),
+        ("> at start", [[">foo": "a", "id": 1], [">foo": "b", "id": 2]] as [[String: Any]]),
+        ("> at end", [["foo>": "a", "id": 1], ["foo>": "b", "id": 2]] as [[String: Any]]),
+        ("double >>", [["a>>b": "x"], ["a>>b": "y"]] as [[String: Any]]),
+        ("multiple > in key", [["a>b>c": "x"], ["a>b>c": "y"]] as [[String: Any]]),
+        ("> field with null", [["a>b": NSNull(), "id": 1], ["a>b": "hello", "id": 2]] as [[String: Any]]),
+        ("> field with object", [["a>b": ["x": 1], "id": 1], ["a>b": ["x": 2], "id": 2]] as [[String: Any]]),
+        ("> field with array", [["a>b": [1, 2], "id": 1], ["a>b": [3], "id": 2]] as [[String: Any]]),
+        ("all fields have >", [[">": 1, "a>b": 2], [">": 3, "a>b": 4]] as [[String: Any]]),
+        ("key looks like flattened path", [["id": 1, "customer>name": "Alice"], ["id": 2, "customer>name": "Bob"]] as [[String: Any]]),
+    ]
+
+    for (name, data) in cases {
+        for noFlatten in [false, true] {
+            let encoded = encodeGeneric(data, opts: GenericOptions(noFlatten: noFlatten))
+            do {
+                let decoded = try decodeGeneric(encoded)
+                let a = try JSONSerialization.data(withJSONObject: data, options: [.sortedKeys])
+                let b = try JSONSerialization.data(withJSONObject: serializableValue(decoded), options: [.sortedKeys])
+                check(a == b, "\(name) (noFlatten=\(noFlatten)) round-trip")
+            } catch {
+                check(false, "\(name) (noFlatten=\(noFlatten)) decode failed: \(error)")
+            }
+        }
     }
 }
 

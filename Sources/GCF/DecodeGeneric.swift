@@ -322,6 +322,13 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, dept
         let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
         return (name, arr, consumed, nil)
     }
+    // Scalar: =value (field names containing ">" excluded from tabular columns).
+    if afterName.hasPrefix("=") {
+        let valStr = String(afterName.dropFirst())
+        let parsed = try parseScalar(valStr, tabularContext: true)
+        if case .missing = parsed { return (name, NSNull(), 1, nil) }
+        return (name, try scalarToAny(parsed), 1, nil)
+    }
     throw GCFError.invalidFieldDeclaration("invalid attachment form: \(afterName)")
 }
 
@@ -349,7 +356,11 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
     var pathColumnMap: [String: [String]] = [:]
     for f in fields {
         if f.contains(">") {
-            pathColumnMap[f] = f.split(separator: ">").map(String.init)
+            let parts = f.split(separator: ">", omittingEmptySubsequences: false).map(String.init)
+            // Only treat as a path column if all segments are non-empty.
+            if parts.allSatisfy({ !$0.isEmpty }) {
+                pathColumnMap[f] = parts
+            }
         }
     }
 
@@ -434,10 +445,10 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         let allAttFields = traditionalAttFields + inlineAttFields
         let attachmentValues = OrderedDictionary()
 
-        if rowHasID && !allAttFields.isEmpty {
+        if rowHasID {
             var inlineIdx = 0
 
-            while i < lines.count && attachmentValues.count < allAttFields.count {
+            while i < lines.count {
                 let aLine = lines[i]
                 let aContent: String?
                 if depth == 0 || aLine.hasPrefix(ind) {
@@ -456,10 +467,6 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                     let rest = String(ac.dropFirst())
                     let (attName, afterNameR) = parseAttachmentName(rest)
 
-                    // Check for orphan attachment.
-                    if !allAttFields.contains(attName) {
-                        throw GCFError.orphanAttachment(attName)
-                    }
                     // Check for duplicate attachment.
                     if attachmentValues[attName] != nil {
                         throw GCFError.duplicateAttachment(attName)
@@ -532,37 +539,16 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             }
         }
 
-        // Orphan check.
-        if !rowHasID || allAttFields.isEmpty {
-            if i < lines.count {
-                let peekLine = lines[i]
-                let peekContent: String
-                if depth > 0 && peekLine.hasPrefix(ind) {
-                    peekContent = String(peekLine.dropFirst(ind.count))
-                } else if depth == 0 {
-                    peekContent = peekLine
-                } else {
-                    peekContent = ""
-                }
-                // Check both v3 (no indent) and v2 (indented) attachment lines.
-                if peekContent.hasPrefix(".") {
-                    let (name, _) = parseAttachmentName(String(peekContent.dropFirst()))
-                    throw GCFError.orphanAttachment(name)
-                }
-                if peekContent.hasPrefix("  .") {
-                    let trimmed = String(peekContent.dropFirst(2))
-                    let (name, _) = parseAttachmentName(String(trimmed.dropFirst()))
-                    throw GCFError.orphanAttachment(name)
-                }
-            }
-        }
-
         // Build row in field order.
         let row = OrderedDictionary()
         for f in fields {
             if missingFields.contains(f) { continue }
             if let v = cellValues[f] { row[f] = v; continue }
             if let v = attachmentValues[f] { row[f] = v; continue }
+        }
+        // Also add any orphan attachment values (fields excluded from column list, e.g. ">" fields).
+        for (k, v) in attachmentValues.orderedPairs {
+            if row[k] == nil { row[k] = v }
         }
         // Unflatten path columns into nested objects.
         if !pathColumnMap.isEmpty {
@@ -657,6 +643,12 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String,
     if afterName.hasPrefix("[") {
         let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
         return (name, arr, consumed)
+    }
+    if afterName.hasPrefix("=") {
+        let valStr = String(afterName.dropFirst())
+        let parsed = try parseScalar(valStr, tabularContext: true)
+        if case .missing = parsed { return (name, NSNull(), 1) }
+        return (name, try scalarToAny(parsed), 1)
     }
     throw GCFError.invalidFieldDeclaration("invalid attachment form: \(afterName)")
 }

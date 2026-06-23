@@ -1,23 +1,36 @@
 import Foundation
 
+/// Options for controlling generic encoding behavior.
+public struct GenericOptions {
+    /// When true, disables promotion of fixed-shape nested objects to path
+    /// columns (e.g. "customer>name"). Nested objects use attachment syntax
+    /// instead. Set when targeting open-weight models that show lower
+    /// comprehension on flattened encoding.
+    public var noFlatten: Bool
+
+    public init(noFlatten: Bool = false) {
+        self.noFlatten = noFlatten
+    }
+}
+
 /// Encode any value into GCF generic profile.
 ///
 /// Accepts Dictionary, NSDictionary (preserves key order), Array, String, Int, Double, Bool, and nil.
-public func encodeGeneric(_ data: Any?) -> String {
+public func encodeGeneric(_ data: Any?, opts: GenericOptions = GenericOptions()) -> String {
     var out = "GCF profile=generic\n"
-    encodeRootValue(data, out: &out)
+    encodeRootValue(data, out: &out, opts: opts)
     return out
 }
 
-private func encodeRootValue(_ v: Any?, out: inout String) {
+private func encodeRootValue(_ v: Any?, out: inout String, opts: GenericOptions) {
     guard let v = v else {
         out += "=-\n"
         return
     }
     if let dict = asOrderedDict(v) {
-        encodeObject(dict, out: &out, depth: 0)
+        encodeObject(dict, out: &out, depth: 0, opts: opts)
     } else if let arr = v as? [Any] {
-        encodeRootArray(arr, out: &out)
+        encodeRootArray(arr, out: &out, opts: opts)
     } else if v is NSNull {
         out += "=-\n"
     } else {
@@ -48,15 +61,15 @@ func asOrderedDict(_ v: Any) -> [(String, Any)]? {
     return nil
 }
 
-private func encodeObject(_ pairs: [(String, Any)], out: inout String, depth: Int) {
+private func encodeObject(_ pairs: [(String, Any)], out: inout String, depth: Int, opts: GenericOptions) {
     let prefix = indentStr(depth)
     for (key, value) in pairs {
         let fk = formatKey(key)
         if let nested = asOrderedDict(value) {
             out += "\(prefix)## \(fk)\n"
-            encodeObject(nested, out: &out, depth: depth + 1)
+            encodeObject(nested, out: &out, depth: depth + 1, opts: opts)
         } else if let arr = value as? [Any] {
-            encodeNamedArray(fk, arr: arr, out: &out, depth: depth)
+            encodeNamedArray(fk, arr: arr, out: &out, depth: depth, opts: opts)
         } else if value is NSNull {
             out += "\(prefix)\(fk)=-\n"
         } else {
@@ -65,7 +78,7 @@ private func encodeObject(_ pairs: [(String, Any)], out: inout String, depth: In
     }
 }
 
-private func encodeRootArray(_ arr: [Any], out: inout String) {
+private func encodeRootArray(_ arr: [Any], out: inout String, opts: GenericOptions) {
     if arr.isEmpty { out += "## [0]\n"; return }
     if allPrimitives(arr) {
         let vals = arr.map { formatScalar($0, delimiter: ",") }
@@ -73,13 +86,13 @@ private func encodeRootArray(_ arr: [Any], out: inout String) {
         return
     }
     if let fields = tabularFields(arr) {
-        encodeTabular("## ", arr: arr, fields: fields, out: &out, depth: 0)
+        encodeTabular("## ", arr: arr, fields: fields, out: &out, depth: 0, opts: opts)
         return
     }
-    encodeExpanded("## ", arr: arr, out: &out, depth: 0)
+    encodeExpanded("## ", arr: arr, out: &out, depth: 0, opts: opts)
 }
 
-private func encodeNamedArray(_ name: String, arr: [Any], out: inout String, depth: Int) {
+private func encodeNamedArray(_ name: String, arr: [Any], out: inout String, depth: Int, opts: GenericOptions) {
     let prefix = indentStr(depth)
     if arr.isEmpty { out += "\(prefix)## \(name) [0]\n"; return }
     if allPrimitives(arr) {
@@ -88,10 +101,10 @@ private func encodeNamedArray(_ name: String, arr: [Any], out: inout String, dep
         return
     }
     if let fields = tabularFields(arr) {
-        encodeTabular("\(prefix)## \(name) ", arr: arr, fields: fields, out: &out, depth: depth)
+        encodeTabular("\(prefix)## \(name) ", arr: arr, fields: fields, out: &out, depth: depth, opts: opts)
         return
     }
-    encodeExpanded("\(prefix)## \(name) ", arr: arr, out: &out, depth: depth)
+    encodeExpanded("\(prefix)## \(name) ", arr: arr, out: &out, depth: depth, opts: opts)
 }
 
 private func tabularFields(_ arr: [Any]) -> [String]? {
@@ -176,6 +189,8 @@ private struct FlatLeaf {
 }
 
 private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: String) -> [FlatLeaf]? {
+    // Field names containing ">" cannot be flattened (would create ambiguous paths).
+    if fieldName.contains(">") { return nil }
     var canonicalShape: [String: String]? = nil // key -> "scalar" | "nested"
     var canonicalKeys: [String]? = nil
 
@@ -272,21 +287,28 @@ private func resolveKeyChain(_ item: Any, keys: [String]) -> (Any?, Bool) {
     return (current, true)
 }
 
-private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int) {
+private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int, opts: GenericOptions) {
     let prefix = indentStr(depth)
 
     // Phase 0: Analyze fields for flattening.
     var flattenMap: [String: [FlatLeaf]] = [:]
-    for f in fields {
-        if let leaves = analyzeFlattenable(arr, fieldName: f, parentPath: ""), !leaves.isEmpty {
-            flattenMap[f] = leaves
+    if !opts.noFlatten {
+        for f in fields {
+            if let leaves = analyzeFlattenable(arr, fieldName: f, parentPath: ""), !leaves.isEmpty {
+                flattenMap[f] = leaves
+            }
         }
     }
+
+    // Fields whose names contain ">" must not appear as tabular columns
+    // because the decoder would interpret them as flattened path columns.
+    let gtFields = Set(fields.filter { flattenMap[$0] == nil && $0.contains(">") })
 
     // Build expanded column list.
     struct Col { let header: String; let type: String; let field: String; let keys: [String] }
     var columns: [Col] = []
     for f in fields {
+        if gtFields.contains(f) { continue }
         if let leaves = flattenMap[f] {
             for leaf in leaves {
                 columns.append(Col(header: formatKey(leaf.path), type: "flat", field: f, keys: leaf.keys))
@@ -294,6 +316,12 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
         } else {
             columns.append(Col(header: formatKey(f), type: "original", field: f, keys: []))
         }
+    }
+
+    // If all fields were excluded (all contain ">"), fall back to expanded.
+    if columns.isEmpty {
+        encodeExpanded(headerPrefix, arr: arr, out: &out, depth: depth, opts: opts)
+        return
     }
 
     // Pre-compute inline schemas and shared array schemas (skip flattened).
@@ -354,6 +382,14 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
             }
         }
 
+        // Emit fields with ">" in their names as per-row attachments.
+        for f in fields {
+            guard gtFields.contains(f) else { continue }
+            guard let v = dict[f] else { continue }
+            rowHasAttachment = true
+            attachments.append(Att(name: f, value: v, inline: false, inlineFields: nil))
+        }
+
         let row = cells.joined(separator: "|")
         if rowHasAttachment {
             out += "\(prefix)@\(i) \(row)\n"
@@ -372,19 +408,26 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
                 out += "\(prefix)\(vals.joined(separator: "|"))\n"
             } else if let nested = asOrderedDict(att.value) {
                 out += "\(prefix).\(fk) {}\n"
-                encodeObject(nested, out: &out, depth: depth + 2)
+                encodeObject(nested, out: &out, depth: depth + 2, opts: opts)
             } else if let subArr = att.value as? [Any] {
                 if let sas = sharedArrSchemas[att.name], i > 0 {
-                    encodeAttachmentArrayShared(prefix, fk: fk, arr: subArr, out: &out, depth: depth + 2, sharedFields: sas)
+                    encodeAttachmentArrayShared(prefix, fk: fk, arr: subArr, out: &out, depth: depth + 2, sharedFields: sas, opts: opts)
                 } else {
-                    encodeAttachmentArray(prefix, fk: fk, arr: subArr, out: &out, depth: depth + 2)
+                    encodeAttachmentArray(prefix, fk: fk, arr: subArr, out: &out, depth: depth + 2, opts: opts)
+                }
+            } else {
+                // Scalar attachment (e.g. field names containing ">").
+                if att.value is NSNull {
+                    out += "\(prefix).\(fk) =-\n"
+                } else {
+                    out += "\(prefix).\(fk) =\(formatScalar(att.value))\n"
                 }
             }
         }
     }
 }
 
-private func encodeAttachmentArrayShared(_ attPrefix: String, fk: String, arr: [Any], out: inout String, depth: Int, sharedFields: [String]) {
+private func encodeAttachmentArrayShared(_ attPrefix: String, fk: String, arr: [Any], out: inout String, depth: Int, sharedFields: [String], opts: GenericOptions) {
     if arr.isEmpty { out += "\(attPrefix).\(fk) [0]\n"; return }
     if allPrimitives(arr) {
         let vals = arr.map { formatScalar($0, delimiter: ",") }
@@ -406,31 +449,31 @@ private func encodeAttachmentArrayShared(_ attPrefix: String, fk: String, arr: [
         }
         return
     }
-    encodeAttachmentArray(attPrefix, fk: fk, arr: arr, out: &out, depth: depth)
+    encodeAttachmentArray(attPrefix, fk: fk, arr: arr, out: &out, depth: depth, opts: opts)
 }
 
-private func encodeAttachmentArray(_ attPrefix: String, fk: String, arr: [Any], out: inout String, depth: Int) {
+private func encodeAttachmentArray(_ attPrefix: String, fk: String, arr: [Any], out: inout String, depth: Int, opts: GenericOptions = GenericOptions()) {
     if arr.isEmpty {
         out += "\(attPrefix).\(fk) [0]\n"
     } else if allPrimitives(arr) {
         let vals = arr.map { formatScalar($0, delimiter: ",") }
         out += "\(attPrefix).\(fk) [\(arr.count)]: \(vals.joined(separator: ","))\n"
     } else if let fields = tabularFields(arr) {
-        encodeTabular("\(attPrefix).\(fk) ", arr: arr, fields: fields, out: &out, depth: depth)
+        encodeTabular("\(attPrefix).\(fk) ", arr: arr, fields: fields, out: &out, depth: depth, opts: opts)
     } else {
-        encodeExpanded("\(attPrefix).\(fk) ", arr: arr, out: &out, depth: depth)
+        encodeExpanded("\(attPrefix).\(fk) ", arr: arr, out: &out, depth: depth, opts: opts)
     }
 }
 
-private func encodeExpanded(_ headerPrefix: String, arr: [Any], out: inout String, depth: Int) {
+private func encodeExpanded(_ headerPrefix: String, arr: [Any], out: inout String, depth: Int, opts: GenericOptions = GenericOptions()) {
     let prefix = indentStr(depth)
     out += "\(headerPrefix)[\(arr.count)]\n"
     for (i, item) in arr.enumerated() {
         if let nested = asOrderedDict(item) {
             out += "\(prefix)@\(i) {}\n"
-            encodeObject(nested, out: &out, depth: depth + 1)
+            encodeObject(nested, out: &out, depth: depth + 1, opts: opts)
         } else if let subArr = item as? [Any] {
-            encodeExpandedArrayItem(prefix, idx: i, arr: subArr, out: &out, depth: depth)
+            encodeExpandedArrayItem(prefix, idx: i, arr: subArr, out: &out, depth: depth, opts: opts)
         } else if item is NSNull {
             out += "\(prefix)@\(i) =-\n"
         } else {
@@ -439,16 +482,16 @@ private func encodeExpanded(_ headerPrefix: String, arr: [Any], out: inout Strin
     }
 }
 
-private func encodeExpandedArrayItem(_ prefix: String, idx: Int, arr: [Any], out: inout String, depth: Int) {
+private func encodeExpandedArrayItem(_ prefix: String, idx: Int, arr: [Any], out: inout String, depth: Int, opts: GenericOptions = GenericOptions()) {
     if arr.isEmpty {
         out += "\(prefix)@\(idx) [0]\n"
     } else if allPrimitives(arr) {
         let vals = arr.map { formatScalar($0, delimiter: ",") }
         out += "\(prefix)@\(idx) [\(arr.count)]: \(vals.joined(separator: ","))\n"
     } else if let fields = tabularFields(arr) {
-        encodeTabular("\(prefix)@\(idx) ", arr: arr, fields: fields, out: &out, depth: depth + 1)
+        encodeTabular("\(prefix)@\(idx) ", arr: arr, fields: fields, out: &out, depth: depth + 1, opts: opts)
     } else {
-        encodeExpanded("\(prefix)@\(idx) ", arr: arr, out: &out, depth: depth + 1)
+        encodeExpanded("\(prefix)@\(idx) ", arr: arr, out: &out, depth: depth + 1, opts: opts)
     }
 }
 
