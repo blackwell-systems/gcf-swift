@@ -345,6 +345,14 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
     var inlineSchemas: [String: [String]] = [:]
     var sharedArraySchemas: [String: [String]] = [:]
 
+    // Detect path columns: fields containing ">".
+    var pathColumnMap: [String: [String]] = [:]
+    for f in fields {
+        if f.contains(">") {
+            pathColumnMap[f] = f.split(separator: ">").map(String.init)
+        }
+    }
+
     while i < lines.count {
         let line = lines[i]
         let content: String
@@ -382,8 +390,23 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         var inlineAttOrder: [String] = []
         var missingFields = Set<String>()
 
+        // Collect path column values for unflattening.
+        var flatValues: [String: Any] = [:]
+        var flatAbsent = Set<String>()
+
         for (j, f) in fields.enumerated() {
             let cellVal = vals[j]
+
+            // Path columns: store values for later unflattening.
+            if pathColumnMap[f] != nil {
+                let parsed = try parseScalar(cellVal, tabularContext: true)
+                switch parsed {
+                case .missing: flatAbsent.insert(f)
+                default: flatValues[f] = try scalarToAny(parsed)
+                }
+                continue
+            }
+
             if cellVal.hasPrefix("^{") && cellVal.hasSuffix("}") {
                 let schemaStr = String(cellVal.dropFirst(1))
                 let ifs = try splitFieldDecl(schemaStr)
@@ -541,11 +564,68 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             if let v = cellValues[f] { row[f] = v; continue }
             if let v = attachmentValues[f] { row[f] = v; continue }
         }
+        // Unflatten path columns into nested objects.
+        if !pathColumnMap.isEmpty {
+            let nested = unflattenPaths(pathColumnMap, flatValues: flatValues, flatAbsent: flatAbsent)
+            for (k, v) in nested.orderedPairs {
+                row[k] = v
+            }
+        }
+
         rows.append(row)
 
         if expectedCount >= 0 && rows.count >= expectedCount { break }
     }
     return (rows, i - start)
+}
+
+private func unflattenPaths(_ pathColumns: [String: [String]],
+                            flatValues: [String: Any],
+                            flatAbsent: Set<String>) -> OrderedDictionary {
+    // Group by top-level parent.
+    var groups: [String: [String]] = [:]
+    var groupOrder: [String] = []
+    for (fieldName, paths) in pathColumns {
+        guard !paths.isEmpty else { continue }
+        let top = paths[0]
+        if groups[top] == nil {
+            groups[top] = []
+            groupOrder.append(top)
+        }
+        groups[top]!.append(fieldName)
+    }
+
+    let result = OrderedDictionary()
+
+    for top in groupOrder {
+        let fieldNames = groups[top]!
+        let allAbsent = fieldNames.allSatisfy { flatAbsent.contains($0) }
+        let allNull = fieldNames.allSatisfy { f in
+            if flatAbsent.contains(f) { return false }
+            if let val = flatValues[f] { return val is NSNull }
+            return true
+        }
+
+        if allAbsent { continue }
+        if allNull { result[top] = NSNull(); continue }
+
+        for fieldName in fieldNames {
+            if flatAbsent.contains(fieldName) { continue }
+            let paths = pathColumns[fieldName]!
+            let val = flatValues[fieldName] ?? NSNull()
+
+            var current = result
+            for k in paths.dropLast() {
+                if current[k] == nil {
+                    current[k] = OrderedDictionary()
+                }
+                current = current[k] as! OrderedDictionary
+            }
+            current[paths.last!] = val
+        }
+    }
+
+    return result
 }
 
 private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String,

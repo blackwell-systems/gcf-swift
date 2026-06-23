@@ -401,8 +401,8 @@ let gatt = encodeGeneric(["orders": [
     ["id": 1, "customer": ["name": "Alice"] as [String: Any]] as [String: Any],
     ["id": 2, "customer": ["name": "Bob"] as [String: Any]] as [String: Any],
 ] as [[String: Any]]] as [String: Any])
-check(gatt.contains("^"), "attachment marker")
-check(gatt.contains(".customer {}"), "attachment syntax")
+check(gatt.contains("\"customer>name\""), "flattened path column")
+check(gatt.contains("Alice") && gatt.contains("Bob"), "flattened values in row")
 
 // Decode Generic v2.0
 section("Decode Generic v2.0")

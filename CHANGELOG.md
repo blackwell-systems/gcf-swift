@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.2.0 (2026-06-22)
+
+### Spec v3.2: Nested Object Flattening
+
+- Encoder automatically flattens fixed-shape nested objects into `>` path column names
+- Decoder reconstructs nested objects from `>` path columns
+- 20-48% fewer tokens on deeply nested API data
+- Zero regression on lossless round-trips (200K random + adversarial)
+- Falls back to attachment mechanism for non-flattenable cases
+
 ## v2.1.0 (2026-06-14)
 
 ### Spec v3.1

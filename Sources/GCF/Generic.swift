@@ -168,19 +168,145 @@ private func sharedArraySchema(_ arr: [Any], fieldName: String) -> [String]? {
     return canonicalFields
 }
 
+// MARK: - Nested object flattening (v3.2)
+
+private struct FlatLeaf {
+    let path: String
+    let keys: [String]
+}
+
+private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: String) -> [FlatLeaf]? {
+    var canonicalShape: [String: String]? = nil // key -> "scalar" | "nested"
+    var canonicalKeys: [String]? = nil
+
+    for item in arr {
+        guard let pairs = asOrderedDict(item) else { return nil }
+        let dict = Dictionary(uniqueKeysWithValues: pairs)
+        guard let v = dict[fieldName] else { continue }
+        if v is NSNull { continue }
+        guard let obj = asOrderedDict(v) else { return nil }
+        if v is [Any] { return nil }
+
+        let keys = obj.map { $0.0 }
+
+        if canonicalShape == nil {
+            var shape: [String: String] = [:]
+            for (k, val) in obj {
+                if k.contains(">") { return nil }
+                if val is [Any] { return nil }
+                if asOrderedDict(val) != nil {
+                    shape[k] = "nested"
+                } else {
+                    shape[k] = "scalar"
+                }
+            }
+            canonicalShape = shape
+            canonicalKeys = keys
+        } else {
+            if keys != canonicalKeys! { return nil }
+            for (k, val) in obj {
+                guard let expected = canonicalShape![k] else { return nil }
+                if expected == "scalar" {
+                    if asOrderedDict(val) != nil || val is [Any] { return nil }
+                } else if expected == "nested" {
+                    if val is [Any] { return nil }
+                    if !(val is NSNull) && asOrderedDict(val) == nil {
+                        return nil
+                    }
+                }
+            }
+        }
+    }
+
+    guard let shape = canonicalShape, let ck = canonicalKeys else { return nil }
+
+    let currentPath = parentPath.isEmpty ? fieldName : "\(parentPath)>\(fieldName)"
+    let parentKeys = parentPath.isEmpty ? [fieldName] : parentPath.split(separator: ">").map(String.init) + [fieldName]
+
+    var leaves: [FlatLeaf] = []
+    for k in ck {
+        if shape[k] == "scalar" {
+            leaves.append(FlatLeaf(path: "\(currentPath)>\(k)", keys: parentKeys + [k]))
+        } else {
+            let subArr: [Any] = arr.map { item -> Any in
+                guard let pairs = asOrderedDict(item) else { return [String: Any]() }
+                let dict = Dictionary(uniqueKeysWithValues: pairs)
+                guard let v = dict[fieldName], !(v is NSNull) else { return [String: Any]() }
+                return v
+            }
+            guard let subLeaves = analyzeFlattenable(subArr, fieldName: k, parentPath: currentPath), !subLeaves.isEmpty else { return nil }
+            leaves.append(contentsOf: subLeaves)
+        }
+    }
+
+    // Guard: reject if any row has non-null object with all-null leaves.
+    if !leaves.isEmpty {
+        for item in arr {
+            guard let pairs = asOrderedDict(item) else { continue }
+            let dict = Dictionary(uniqueKeysWithValues: pairs)
+            guard let v = dict[fieldName], !(v is NSNull) else { continue }
+            let allNull = leaves.allSatisfy { leaf in
+                let (val, exists) = resolveKeyChain(item, keys: leaf.keys)
+                return exists && (val is NSNull || val == nil)
+            }
+            if allNull { return nil }
+        }
+    }
+
+    return leaves
+}
+
+private func resolveKeyChain(_ item: Any, keys: [String]) -> (Any?, Bool) {
+    guard !keys.isEmpty else { return (nil, false) }
+    guard let pairs = asOrderedDict(item) else { return (nil, false) }
+    let dict = Dictionary(uniqueKeysWithValues: pairs)
+    guard let first = dict[keys[0]] else { return (nil, false) }
+    if first is NSNull { return (nil, true) }
+    var current: Any = first
+    for k in keys.dropFirst() {
+        guard let pairs2 = asOrderedDict(current) else { return (nil, false) }
+        let d = Dictionary(uniqueKeysWithValues: pairs2)
+        guard let next = d[k] else { return (nil, false) }
+        current = next
+    }
+    return (current, true)
+}
+
 private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int) {
     let prefix = indentStr(depth)
 
-    // Pre-compute inline schemas and shared array schemas.
+    // Phase 0: Analyze fields for flattening.
+    var flattenMap: [String: [FlatLeaf]] = [:]
+    for f in fields {
+        if let leaves = analyzeFlattenable(arr, fieldName: f, parentPath: ""), !leaves.isEmpty {
+            flattenMap[f] = leaves
+        }
+    }
+
+    // Build expanded column list.
+    struct Col { let header: String; let type: String; let field: String; let keys: [String] }
+    var columns: [Col] = []
+    for f in fields {
+        if let leaves = flattenMap[f] {
+            for leaf in leaves {
+                columns.append(Col(header: formatKey(leaf.path), type: "flat", field: f, keys: leaf.keys))
+            }
+        } else {
+            columns.append(Col(header: formatKey(f), type: "original", field: f, keys: []))
+        }
+    }
+
+    // Pre-compute inline schemas and shared array schemas (skip flattened).
     var inlineSchemas: [String: [String]] = [:]
     var sharedArrSchemas: [String: [String]] = [:]
     for f in fields {
+        if flattenMap[f] != nil { continue }
         if let ifs = inlineSchemaFields(arr, fieldName: f) { inlineSchemas[f] = ifs }
         if let sas = sharedArraySchema(arr, fieldName: f) { sharedArrSchemas[f] = sas }
     }
 
-    let fmtFields = fields.map { formatKey($0) }
-    out += "\(headerPrefix)[\(arr.count)]{\(fmtFields.joined(separator: ","))}\n"
+    let headerFields = columns.map { $0.header }
+    out += "\(headerPrefix)[\(arr.count)]{\(headerFields.joined(separator: ","))}\n"
 
     for (i, item) in arr.enumerated() {
         guard let pairs = asOrderedDict(item) else { continue }
@@ -191,7 +317,22 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
         var attachments: [Att] = []
         var rowHasAttachment = false
 
-        for f in fields {
+        for col in columns {
+            if col.type == "flat" {
+                guard dict[col.keys[0]] != nil else { cells.append("~"); continue }
+                let topVal = dict[col.keys[0]]!
+                if topVal is NSNull {
+                    cells.append("-")
+                } else {
+                    let (val, exists) = resolveKeyChain(item, keys: col.keys)
+                    if !exists { cells.append("~") }
+                    else if val is NSNull || val == nil { cells.append("-") }
+                    else { cells.append(formatScalar(val!, delimiter: "|")) }
+                }
+                continue
+            }
+
+            let f = col.field
             guard let v = dict[f] else { cells.append("~"); continue }
             if v is NSNull { cells.append("-"); continue }
             if asOrderedDict(v) != nil || v is [Any] {
