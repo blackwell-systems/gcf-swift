@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.2.3 (2026-07-10)
+
+### Fixes
+
+- **Graph encode parity:** the graph encoder now sorts symbols by distance ascending then score descending (assigning `@N` ids in output order) and omits zero-valued header fields (`budget`, `tokens`, `edges`), matching the reference SDKs byte-for-byte. Previously Swift emitted symbols in input order with `budget=0 tokens=0 edges=0` always present, diverging from the other implementations.
+- **Ordered JSON parse:** `parseJSONOrdered` is now a proper recursive-descent parser. The prior implementation scanned the whole document for each key's first `"key":` occurrence, which mis-ordered nested-object keys (a nested `{id,name}` could pick up an earlier top-level `name`), and routed through `JSONSerialization`, which dropped negative-zero. Nested key order and `-0` now round-trip faithfully.
+
+### Tests
+
+- Added `ConformanceV2Test`, running the shared cross-SDK conformance fixtures (`gcf/tests/conformance`) against the Swift implementation, mirroring the TypeScript/Go/Rust/Python/Kotlin runners. Skips only session/delta/pack-root/delta-verify and binary inputs. One deliberate Swift-only byte divergence is round-trip-checked but not byte-matched: the encoder quotes any non-ASCII scalar (grapheme-cluster safety), so an emoji string is quoted where other SDKs leave it bare.
+
 ## v2.2.2 (2026-07-10)
 
 ### Fixes

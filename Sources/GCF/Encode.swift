@@ -4,24 +4,39 @@ import Foundation
 public func encode(_ payload: Payload) -> String {
     var b = ""
 
-    // Build symbol index for edge references.
+    // Group symbols by distance (sorted by score descending within each group).
+    let groups = groupByDistance(payload.symbols)
+
+    // Build symbol index AFTER sorting, so IDs are sequential in output order.
     var symIndex: [String: Int] = [:]
-    for (i, s) in payload.symbols.enumerated() {
-        symIndex[s.qualifiedName] = i
+    var nextID = 0
+    for g in groups {
+        for s in g.symbols {
+            symIndex[s.qualifiedName] = nextID
+            nextID += 1
+        }
     }
 
     // Count valid edges (both endpoints in symbol index).
     let validEdges = payload.edges.filter { symIndex[$0.source] != nil && symIndex[$0.target] != nil }.count
 
-    // Header line.
-    b += "GCF profile=graph tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges)"
+    // Header line. Zero-valued fields are omitted.
+    b += "GCF profile=graph tool=\(payload.tool)"
+    if payload.tokenBudget > 0 {
+        b += " budget=\(payload.tokenBudget)"
+    }
+    if payload.tokensUsed > 0 {
+        b += " tokens=\(payload.tokensUsed)"
+    }
+    b += " symbols=\(payload.symbols.count)"
+    if validEdges > 0 {
+        b += " edges=\(validEdges)"
+    }
     if !payload.packRoot.isEmpty {
         b += " pack_root=\(payload.packRoot)"
     }
     b += "\n"
 
-    // Group symbols by distance.
-    let groups = groupByDistance(payload.symbols)
     let groupNames = ["targets", "related", "extended"]
 
     for g in groups {
@@ -65,9 +80,19 @@ struct DistanceGroup {
 
 func groupByDistance(_ symbols: [Symbol]) -> [DistanceGroup] {
     guard !symbols.isEmpty else { return [] }
+    // Sort by distance ascending, then score descending within each group (stable).
+    let sorted = symbols.enumerated().sorted { a, b in
+        if a.element.distance != b.element.distance {
+            return a.element.distance < b.element.distance
+        }
+        if a.element.score != b.element.score {
+            return a.element.score > b.element.score
+        }
+        return a.offset < b.offset  // stable: preserve original order on ties
+    }.map { $0.element }
     var groups: [DistanceGroup] = []
     var current: DistanceGroup?
-    for s in symbols {
+    for s in sorted {
         if current == nil || current!.distance != s.distance {
             if let c = current {
                 groups.append(c)

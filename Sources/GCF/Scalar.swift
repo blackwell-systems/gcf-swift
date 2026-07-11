@@ -209,6 +209,7 @@ public enum GCFError: Error, CustomStringConvertible {
     case duplicateAttachment(String)
     case invalidItemId(Int, String)
     case invalidFieldDeclaration(String)
+    case invalidJSON(String)
 
     public var description: String {
         switch self {
@@ -223,6 +224,7 @@ public enum GCFError: Error, CustomStringConvertible {
         case .trailingCharacters: return "trailing_characters: after closing quote"
         case .invalidEscape(let e): return "invalid_escape: \(e)"
         case .invalidSurrogate(let s): return "invalid_surrogate: \(s)"
+        case .invalidJSON(let s): return "invalid_json: \(s)"
         case .invalidIndent: return "invalid_indent: indentation increases by more than one level"
         case .tabIndentation: return "tab_indentation: tabs in leading whitespace"
         case .duplicateKey(let k): return "duplicate_key: \(k)"
