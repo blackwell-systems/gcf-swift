@@ -198,7 +198,14 @@ private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: Str
         guard let pairs = asOrderedDict(item) else { return nil }
         let dict = Dictionary(uniqueKeysWithValues: pairs)
         guard let v = dict[fieldName] else { continue }
-        if v is NSNull { continue }
+        // A nested (non-top-level) null cannot be flattened losslessly: its leaves
+        // would encode as absent ("~") and unflatten back to a missing key, not null.
+        // Bail to the attachment path. A top-level null is fine (emits "-" and
+        // reconstructs via the all-null rule), so just skip the row from shape analysis.
+        if v is NSNull {
+            if !parentPath.isEmpty { return nil }
+            continue
+        }
         guard let obj = asOrderedDict(v) else { return nil }
         if v is [Any] { return nil }
 

@@ -160,6 +160,82 @@ func genArray(_ rng: inout SeededRNG, depth: Int, maxDepth: Int) -> [Any] {
     return arr
 }
 
+// MARK: - Flatten-path generator (aligned nested objects, null at depth)
+
+/// A fixed nested schema: a scalar leaf or an ordered set of named sub-shapes.
+indirect enum FlatShape {
+    case scalar
+    case nested([(String, FlatShape)])
+}
+
+func genFlatShape(_ rng: inout SeededRNG, depth: Int, maxDepth: Int) -> FlatShape {
+    if depth >= maxDepth || rng.nextDouble() < 0.45 { return .scalar }
+    var sub: [(String, FlatShape)] = []
+    var seen = Set<String>()
+    for _ in 0..<(1 + rng.nextInt(3)) {
+        let k = genBareKey(&rng)
+        if seen.insert(k).inserted {
+            sub.append((k, genFlatShape(&rng, depth: depth + 1, maxDepth: maxDepth)))
+        }
+    }
+    return sub.isEmpty ? .scalar : .nested(sub)
+}
+
+func materializeFlatShape(_ rng: inout SeededRNG, _ shape: FlatShape) -> Any {
+    switch shape {
+    case .scalar:
+        return genScalar(&rng)
+    case .nested(let sub):
+        let od = OrderedDictionary()
+        for (k, s) in sub {
+            // A nested sub-object is sometimes null (intermediate null — the case the
+            // pre-fix encoder dropped) instead of a full object.
+            if case .scalar = s {
+                od[k] = materializeFlatShape(&rng, s)
+            } else if rng.nextDouble() < 0.3 {
+                od[k] = NSNull()
+            } else {
+                od[k] = materializeFlatShape(&rng, s)
+            }
+        }
+        return od
+    }
+}
+
+func genFlattenableArray(_ rng: inout SeededRNG) -> [Any] {
+    var schema: [(String, FlatShape)] = [("id", .scalar)]
+    var seen: Set<String> = ["id"]
+    var hasNested = false
+    for _ in 0..<(1 + rng.nextInt(3)) {
+        let k = genBareKey(&rng)
+        if !seen.insert(k).inserted { continue }
+        let s = genFlatShape(&rng, depth: 1, maxDepth: 3)
+        if case .nested = s { hasNested = true }
+        schema.append((k, s))
+    }
+    if !hasNested {
+        let k = genBareKey(&rng)
+        schema.append((k, .nested([(genBareKey(&rng), .nested([(genBareKey(&rng), .scalar)]))])))
+    }
+    let rows = 2 + rng.nextInt(6)
+    var arr: [Any] = []
+    for _ in 0..<rows {
+        let od = OrderedDictionary()
+        for (f, s) in schema {
+            let x = rng.nextDouble()
+            if x < 0.12 {
+                continue  // field absent this row
+            } else if x < 0.24 {
+                od[f] = NSNull()  // field present-null (top-level null)
+            } else {
+                od[f] = materializeFlatShape(&rng, s)
+            }
+        }
+        arr.append(od)
+    }
+    return arr
+}
+
 // MARK: - Adversarial Generators
 
 let collisionStrings = [
@@ -391,6 +467,32 @@ final class RoundTripTests: XCTestCase {
             }
         }
         print("PASS: \(iterations) random values round-tripped successfully")
+    }
+
+    /// Aligned arrays whose shared fields are fixed-shape nested objects, with a
+    /// field or an intermediate nested level sometimes null/absent — the v3.2 flatten
+    /// path the scalar-only generator never produces.
+    func testPropertyRoundTripFlatten() throws {
+        let iterations = getIterations()
+        var rng = SeededRNG(seed: 7)
+        for i in 0..<iterations {
+            let val = genFlattenableArray(&rng)
+            for noFlatten in [false, true] {
+                let gcfText = encodeGeneric(val, opts: GenericOptions(noFlatten: noFlatten))
+                let decoded: Any
+                do {
+                    decoded = try decodeGeneric(gcfText)
+                } catch {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): decode failed: \(error)")
+                    return
+                }
+                if !deepEqual(val, decoded) {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): round-trip mismatch\n  input: \(valueToJSON(val))\n  decoded: \(valueToJSON(decoded))\n  gcf: \(String(gcfText.prefix(500)))")
+                    return
+                }
+            }
+        }
+        print("PASS: \(iterations) aligned nested arrays round-tripped successfully")
     }
 
     func testPropertyRoundTripAdversarial() throws {
