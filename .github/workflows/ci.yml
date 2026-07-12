@@ -10,5 +10,19 @@ jobs:
   test-macos:
     runs-on: macos-latest
     steps:
+      # Check out gcf-swift and the shared-fixtures gcf repo as SIBLINGS so the
+      # conformance runner's ../gcf/tests/conformance path (resolved from #filePath)
+      # resolves on CI.
       - uses: actions/checkout@v4
-      - run: swift test
+        with:
+          path: gcf-swift
+      - uses: actions/checkout@v4
+        with:
+          repository: blackwell-systems/gcf
+          path: gcf
+      - name: Build
+        run: swift build
+        working-directory: gcf-swift
+      - name: Test (unit + shared conformance fixtures)
+        run: swift test
+        working-directory: gcf-swift

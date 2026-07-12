@@ -152,6 +152,43 @@ Sales|2|Bob|72000
 
 Works on dictionaries, arrays, and primitives. Arrays of uniform objects get tabular rows. Nested objects use `## key` section headers.
 
+## Generic-Profile Delta (multi-turn)
+
+In an agent loop the same keyed table gets re-queried turn after turn. Instead of re-sending the whole table each time, send only the changed rows (SPEC §10a):
+
+```swift
+import GCF
+
+let base = GenericSet(key: "id", fields: ["id", "status"], rows: [
+    ["id": 1001, "status": "pending"],
+    ["id": 1002, "status": "shipped"],
+])
+let next = GenericSet(key: "id", fields: ["id", "status"], rows: [
+    ["id": 1001, "status": "shipped"],   // changed
+    ["id": 1003, "status": "pending"],   // added (1002 removed)
+])
+
+let d = try diffGenericSets(base, next)
+let wire = encodeGenericDelta(d)                                   // ## added / ## changed / ## removed
+let held = try verifyGenericDelta(base, d, expectedNewRoot: d.newRoot)  // atomic apply + new_root verification
+```
+
+Opt-in and bilateral, keyed on content-addressed pack roots. By the 5th overlapping call, ~97% fewer tokens than re-sending JSON. SHA-256 uses the platform `CryptoKit` framework (no package dependency added).
+
+### Re-anchor session helper
+
+`GenericDeltaSession` manages the delta/re-anchor cadence for you: each `next(_:)` returns either a compact delta or, on its cadence, a full re-anchor (which re-grounds the consumer), updating its held base.
+
+```swift
+let sess = GenericDeltaSession(base: base, tool: "orders", policy: .sizeGuard)
+let full = sess.currentFull()                     // transmit the base once to establish it
+for snapshot in stream {                          // each turn's current GenericSet
+    let (wire, isFull) = try sess.next(snapshot)  // a compact delta, or a periodic full re-anchor
+}
+```
+
+`ReanchorPolicy.fixed(15)` re-anchors every N turns (construct via `.fixed(_:)` so `n <= 0` clamps to `DEFAULT_REANCHOR_N` = 15); `.sizeGuard` (recommended) re-anchors once the cumulative delta reaches a full payload's size. It introduces no new wire syntax and the decoder stays cadence-agnostic, so a re-anchor is just the protocol's "full" outcome on a schedule.
+
 ## API
 
 | Function | Description |
@@ -160,7 +197,11 @@ Works on dictionaries, arrays, and primitives. Arrays of uniform objects get tab
 | `encodeGeneric(_ data: Any?) -> String` | Encode any value to GCF tabular format |
 | `decode(_ input: String) throws -> Payload` | Parse GCF text back to a Payload |
 | `encodeWithSession(_ payload: Payload, session: Session?) -> String` | Encode with session deduplication |
-| `encodeDelta(_ delta: DeltaPayload) -> String` | Encode a delta (added/removed only) |
+| `encodeDelta(_ delta: DeltaPayload) -> String` | Encode a graph delta (added/removed only) |
+| `diffGenericSets(_ base: GenericSet, _ next: GenericSet) throws -> GenericDeltaPayload` | Diff two keyed record sets (generic profile) |
+| `encodeGenericDelta(_ d: GenericDeltaPayload) -> String` / `decodeGenericDelta(_ text: String) throws` | Generic-profile delta wire (§10a) |
+| `verifyGenericDelta(_ base: GenericSet, _ d: GenericDeltaPayload, expectedNewRoot: String) throws -> GenericSet` | Atomic apply + `new_root` verification |
+| `GenericDeltaSession(base:tool:policy:)` | Producer-side re-anchor cadence helper (§10a.8) |
 | `Session()` | Create a new session tracker (thread-safe) |
 
 ## Types
@@ -170,7 +211,9 @@ Works on dictionaries, arrays, and primitives. Arrays of uniform objects get tab
 | `Payload` | Full GCF payload: tool, budget, symbols, edges, pack root |
 | `Symbol` | Graph node: qualified name, kind, score, provenance, distance |
 | `Edge` | Directed relationship: source, target, edge type |
-| `DeltaPayload` | Diff between two packs: added/removed symbols and edges |
+| `DeltaPayload` | Diff between two graph packs: added/removed symbols and edges |
+| `GenericSet` / `GenericDeltaPayload` | Keyed record set and its generic-profile diff (§10a) |
+| `GenericDeltaSession` | Stateful producer that schedules delta vs full re-anchor (§10a.8) |
 | `Session` | Thread-safe tracker for multi-call deduplication |
 | `kindAbbrev` / `kindExpand` | Bidirectional kind abbreviation maps |
 
