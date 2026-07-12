@@ -120,8 +120,47 @@ final class ConformanceV2Test: XCTestCase {
             } else {
                 XCTAssertEqual(genericPackRoot(try apply()), fx["expected"] as? String ?? "", rel)
             }
+        case "generic-delta-session":
+            try runGenericDeltaSession(rel: rel, fx: fx)
         default:
             throw XCTSkip("unsupported operation: \(op)")
+        }
+    }
+
+    /// Drives a `GenericDeltaSession` through the fixture's updates and checks the
+    /// initial full plus every (isFull, wire) emission: the producer-side
+    /// re-anchor cadence contract, byte-identical across SDKs.
+    private func runGenericDeltaSession(rel: String, fx: OrderedDictionary) throws {
+        let inp = fx["input"] as? OrderedDictionary
+        let base = toSet(inp?["base"])
+        let tool = inp?["tool"] as? String ?? ""
+
+        let policyOD = inp?["policy"] as? OrderedDictionary
+        let mode = policyOD?["mode"] as? String ?? ""
+        let policy: ReanchorPolicy
+        if mode == "sizeGuard" {
+            policy = .sizeGuard
+        } else {
+            policy = .fixed((policyOD?["n"] as? NSNumber)?.intValue ?? 0)
+        }
+
+        let updates = (inp?["updates"] as? [Any] ?? []).map { toSet($0) }
+
+        let exp = fx["expected"] as? OrderedDictionary
+        let initialFull = exp?["initialFull"] as? String ?? ""
+        let emissions = exp?["emissions"] as? [Any] ?? []
+
+        let s = GenericDeltaSession(base: base, tool: tool, policy: policy)
+        XCTAssertEqual(s.currentFull(), initialFull, "\(rel): initial full")
+
+        for (i, up) in updates.enumerated() {
+            let (wire, isFull) = try s.next(up)
+            guard i < emissions.count, let em = emissions[i] as? OrderedDictionary else {
+                XCTFail("\(rel) turn \(i + 1): no expected emission")
+                continue
+            }
+            XCTAssertEqual(isFull, (em["isFull"] as? Bool) ?? false, "\(rel) turn \(i + 1): isFull")
+            XCTAssertEqual(wire, em["wire"] as? String ?? "", "\(rel) turn \(i + 1): wire")
         }
     }
 
@@ -144,7 +183,8 @@ final class ConformanceV2Test: XCTestCase {
 
     private func toSet(_ v: Any?) -> GenericSet {
         let od = v as? OrderedDictionary
-        return GenericSet(key: od?["key"] as? String ?? "",
+        return GenericSet(name: od?["name"] as? String ?? "",
+                          key: od?["key"] as? String ?? "",
                           fields: toFields(od?["fields"]),
                           rows: toRows(od?["rows"]))
     }

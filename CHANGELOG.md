@@ -12,6 +12,11 @@
   - `verifyGenericDelta` (atomic apply + `new_root` verification)
 - Delta is opt-in and bilateral; the existing `encodeGeneric` path is unchanged (backward compatible). SHA-256 uses the platform `CryptoKit` framework (no package dependency added).
 
+### Generic-profile delta session helper (SPEC §10a.8)
+
+- `GenericDeltaSession`: producer-side helper that manages the re-anchor cadence for a stream of generic-profile updates. Each `next(_:)` emits either a compact delta or, on its chosen cadence, a full re-anchor, updating its held base; a schema change forces a full (§10a.7). It introduces no new wire syntax: every payload is byte-identical to `encodeGenericFull` / `encodeGenericDelta`, and the decoder accepts them cadence-agnostically. `ReanchorPolicy` is `.fixedN(n)` (re-anchor every n turns; construct via `ReanchorPolicy.fixed(_:)` so n <= 0 clamps to `DEFAULT_REANCHOR_N` = 15) or `.sizeGuard` (re-anchor once cumulative delta bytes reach the current full payload's byte size). Byte-for-byte interoperable with `gcf-go`, `gcf-python`, `gcf-typescript`, `gcf-rust`, and `gcf-kotlin`; cadence byte accounting uses UTF-8 length (`utf8.count`) to match the reference implementations.
+- Conformance runner support for `generic-delta-session` (3 shared fixtures: fixed-N cadence, size-guard, schema-change forced full); unit suite mirrors the Go tests (fixed-N pattern, size-guard trigger, 30-turn cadence count, and the load-bearing consumer-stays-in-sync invariant under both policies).
+
 ### Tests
 
 - Unit suite mirroring the other SDKs: self-proving round-trip (diff -> encode -> apply -> recomputed root), determinism / row-order invariance, no-type-collision canonicalization, every invariant/error path, full-payload wire round-trip, the complete server -> wire -> consumer end-to-end loop, and malformed-wire-fails-closed.
