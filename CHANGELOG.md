@@ -21,6 +21,7 @@
 
 - Unit suite mirroring the other SDKs: self-proving round-trip (diff -> encode -> apply -> recomputed root), determinism / row-order invariance, no-type-collision canonicalization, every invariant/error path, full-payload wire round-trip, the complete server -> wire -> consumer end-to-end loop, and malformed-wire-fails-closed.
 - Conformance runner support for `generic-pack-root`, `generic-delta`, `generic-delta-verify`, `generic-delta-decode` (12 shared fixtures); produces identical pack roots and delta wire to the Go, Python, TypeScript, and Rust SDKs.
+- Generic-delta fuzz (`GenericDeltaFuzzTests`), mirroring `gcf-go`: the decoder never crashes on arbitrary/mutated input, and arbitrary UTF-8 string cells (including multi-byte and control characters) survive the full-wire round-trip with the pack root preserved.
 
 ## v2.2.3 (2026-07-10)
 
