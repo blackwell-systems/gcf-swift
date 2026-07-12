@@ -97,9 +97,71 @@ final class ConformanceV2Test: XCTestCase {
         case "error":
             let input = fx["input"] as? String ?? ""
             XCTAssertThrowsError(try decodeGeneric(input), rel)
+        case "generic-pack-root":
+            XCTAssertEqual(genericPackRoot(toSet(fx["input"])), fx["expected"] as? String ?? "", rel)
+        case "generic-delta":
+            XCTAssertEqual(encodeGenericDelta(toDelta(fx["input"])), fx["expected"] as? String ?? "", rel)
+        case "generic-delta-verify", "generic-delta-decode":
+            let inp = fx["input"] as? OrderedDictionary
+            let base = toSet(inp?["base"])
+            let expNewRoot = inp?["expectedNewRoot"] as? String ?? ""
+            let apply: () throws -> GenericSet
+            if op == "generic-delta-verify" {
+                let d = toDelta(inp?["delta"])
+                apply = { try verifyGenericDelta(base, d, expectedNewRoot: expNewRoot) }
+            } else {
+                let wire = inp?["wire"] as? String ?? ""
+                apply = { try verifyGenericDelta(base, try decodeGenericDelta(wire), expectedNewRoot: expNewRoot) }
+            }
+            if let expErr = fx["expectedError"] as? String {
+                XCTAssertThrowsError(try apply(), rel) { err in
+                    XCTAssertTrue("\(err)".contains(expErr), "\(rel): expected '\(expErr)', got \(err)")
+                }
+            } else {
+                XCTAssertEqual(genericPackRoot(try apply()), fx["expected"] as? String ?? "", rel)
+            }
         default:
             throw XCTSkip("unsupported operation: \(op)")
         }
+    }
+
+    // MARK: - Generic-delta fixture builders
+
+    private func toRow(_ v: Any?) -> [String: Any] {
+        guard let od = v as? OrderedDictionary else { return [:] }
+        var m: [String: Any] = [:]
+        for (k, val) in od.orderedPairs { m[k] = val }
+        return m
+    }
+
+    private func toRows(_ v: Any?) -> [[String: Any]] {
+        (v as? [Any])?.map { toRow($0) } ?? []
+    }
+
+    private func toFields(_ v: Any?) -> [String] {
+        (v as? [Any])?.compactMap { $0 as? String } ?? []
+    }
+
+    private func toSet(_ v: Any?) -> GenericSet {
+        let od = v as? OrderedDictionary
+        return GenericSet(key: od?["key"] as? String ?? "",
+                          fields: toFields(od?["fields"]),
+                          rows: toRows(od?["rows"]))
+    }
+
+    private func toDelta(_ v: Any?) -> GenericDeltaPayload {
+        let od = v as? OrderedDictionary
+        return GenericDeltaPayload(
+            tool: od?["tool"] as? String ?? "",
+            key: od?["key"] as? String ?? "",
+            fields: toFields(od?["fields"]),
+            baseRoot: od?["baseRoot"] as? String ?? "",
+            newRoot: od?["newRoot"] as? String ?? "",
+            added: toRows(od?["added"]),
+            changed: toRows(od?["changed"]),
+            removed: (od?["removed"] as? [Any]) ?? [],
+            deltaTokens: (od?["deltaTokens"] as? Int) ?? 0,
+            fullTokens: (od?["fullTokens"] as? Int) ?? 0)
     }
 
     // MARK: - Helpers

@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.3.0 (unreleased)
+
+### Generic-profile delta encoding (SPEC §10a)
+
+- Full producer + consumer implementation of generic-profile delta, byte-for-byte interoperable with `gcf-go`, `gcf-python`, `gcf-typescript`, and `gcf-rust`:
+  - `GenericSet` (keyed record set), `GenericDeltaPayload`
+  - `genericPackRoot` (`gcf-pack-root-v1`, generic profile) with a purpose-built cell canonicalization (`canonicalCell`) decoupled from the wire cell encoder: collision-free (null/bool/number bare, strings always quoted) and record-safe. Fields and records sort by UTF-8 byte order (`utf8.lexicographicallyPrecedes`) because Swift's default `String` ordering is Unicode-normalized, not byte-wise; this keeps pack roots identical across SDKs.
+  - `diffGenericSets` (the blessed producer path; centralizes the keyed-diff invariants), `encodeGenericFull`, `encodeGenericDelta`
+  - `decodeGenericFull`, `decodeGenericDelta` (consumer wire parsing)
+  - `verifyGenericDelta` (atomic apply + `new_root` verification)
+- Delta is opt-in and bilateral; the existing `encodeGeneric` path is unchanged (backward compatible). SHA-256 uses the platform `CryptoKit` framework (no package dependency added).
+
+### Tests
+
+- Unit suite mirroring the other SDKs: self-proving round-trip (diff -> encode -> apply -> recomputed root), determinism / row-order invariance, no-type-collision canonicalization, every invariant/error path, full-payload wire round-trip, the complete server -> wire -> consumer end-to-end loop, and malformed-wire-fails-closed.
+- Conformance runner support for `generic-pack-root`, `generic-delta`, `generic-delta-verify`, `generic-delta-decode` (12 shared fixtures); produces identical pack roots and delta wire to the Go, Python, TypeScript, and Rust SDKs.
+
 ## v2.2.3 (2026-07-10)
 
 ### Fixes
