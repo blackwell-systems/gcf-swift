@@ -122,6 +122,18 @@ final class ConformanceV2Test: XCTestCase {
             }
         case "generic-delta-session":
             try runGenericDeltaSession(rel: rel, fx: fx)
+        case "graph-stream-encode":
+            let expected = fx["expected"] as? String ?? ""
+            let payload = toPayload(fx["input"])
+            let sink = StringSink()
+            let opts = StreamOptions(tokenBudget: payload.tokenBudget,
+                                     tokensUsed: payload.tokensUsed,
+                                     packRoot: payload.packRoot)
+            let enc = StreamEncoder(writer: sink, tool: payload.tool, options: opts)
+            for sym in payload.symbols { enc.writeSymbol(sym) }
+            for edge in payload.edges { enc.writeEdge(edge) }
+            enc.close()
+            XCTAssertEqual(sink.text, expected, rel)
         default:
             throw XCTSkip("unsupported operation: \(op)")
         }
@@ -261,4 +273,11 @@ final class ConformanceV2Test: XCTestCase {
         if let en = expected as? NSNumber, let gn = got as? NSNumber { return en == gn }
         return "\(expected)" == "\(got)"
     }
+}
+
+/// In-memory StreamWriter that accumulates the streaming encoder output so a
+/// conformance fixture can compare the full string against its expected value.
+private final class StringSink: StreamWriter {
+    private(set) var text = ""
+    func write(_ string: String) { text += string }
 }
