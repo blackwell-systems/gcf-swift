@@ -123,15 +123,20 @@ final class ConformanceV2Test: XCTestCase {
         case "generic-delta-session":
             try runGenericDeltaSession(rel: rel, fx: fx)
         case "graph-stream-encode":
-            // Skip a fixture requesting stream options this runner does not support
-            // (e.g. labeledTrailerCounts, SPEC 8.4.1). This runner supports none.
-            if fx["options"] != nil { throw XCTSkip("unsupported stream options") }
+            // labeledTrailerCounts (SPEC 8.4.1) is supported; skip only if the
+            // fixture requests some OTHER stream option this runner does not handle.
+            let streamOpts = fx["options"] as? OrderedDictionary
+            if let so = streamOpts, so.orderedKeys.contains(where: { $0 != "labeledTrailerCounts" }) {
+                throw XCTSkip("unsupported stream options")
+            }
+            let labeledTrailer = (streamOpts?["labeledTrailerCounts"] as? Bool) ?? false
             let expected = fx["expected"] as? String ?? ""
             let payload = toPayload(fx["input"])
             let sink = StringSink()
             let opts = StreamOptions(tokenBudget: payload.tokenBudget,
                                      tokensUsed: payload.tokensUsed,
-                                     packRoot: payload.packRoot)
+                                     packRoot: payload.packRoot,
+                                     labeledTrailerCounts: labeledTrailer)
             let enc = StreamEncoder(writer: sink, tool: payload.tool, options: opts)
             for sym in payload.symbols { enc.writeSymbol(sym) }
             for edge in payload.edges { enc.writeEdge(edge) }

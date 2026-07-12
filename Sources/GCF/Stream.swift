@@ -6,12 +6,19 @@ public struct StreamOptions {
     public var tokensUsed: Int
     public var packRoot: String
     public var session: Bool
+    /// Opt into the labeled trailer counts form (SPEC §8.4.1): the `##! summary`
+    /// trailer emits `counts=` as `label:count` per group (e.g.
+    /// `counts=targets:1,related:1,edges:1`) instead of the default positional
+    /// values-only form (`counts=1,1,1`). Default false keeps the trailer
+    /// byte-identical to prior output.
+    public var labeledTrailerCounts: Bool
 
-    public init(tokenBudget: Int = 0, tokensUsed: Int = 0, packRoot: String = "", session: Bool = false) {
+    public init(tokenBudget: Int = 0, tokensUsed: Int = 0, packRoot: String = "", session: Bool = false, labeledTrailerCounts: Bool = false) {
         self.tokenBudget = tokenBudget
         self.tokensUsed = tokensUsed
         self.packRoot = packRoot
         self.session = session
+        self.labeledTrailerCounts = labeledTrailerCounts
     }
 }
 
@@ -32,9 +39,11 @@ public class StreamEncoder {
     private var groupCounts: [(String, Int)] = []
     private var edgeCount = 0
     private var edgesStarted = false
+    private let labeledTrailerCounts: Bool
 
     public init(writer: StreamWriter, tool: String, options: StreamOptions = StreamOptions()) {
         self.writer = writer
+        self.labeledTrailerCounts = options.labeledTrailerCounts
 
         var parts = ["GCF profile=graph tool=\(tool)"]
         if options.tokenBudget > 0 { parts.append("budget=\(options.tokenBudget)") }
@@ -121,9 +130,17 @@ public class StreamEncoder {
         lock.lock()
         defer { lock.unlock() }
 
-        var counts: [String] = groupCounts.filter { $0.1 > 0 }.map { String($0.1) }
+        // Build ordered label:count sections, then emit either the labeled form
+        // (SPEC §8.4.1, opt-in) or the default positional values-only form.
+        var sections: [(String, Int)] = groupCounts.filter { $0.1 > 0 }
         if edgeCount > 0 {
-            counts.append(String(edgeCount))
+            sections.append(("edges", edgeCount))
+        }
+        let counts: [String]
+        if labeledTrailerCounts {
+            counts = sections.map { "\($0.0):\($0.1)" }
+        } else {
+            counts = sections.map { String($0.1) }
         }
         writer.write("##! summary symbols=\(nextID) edges=\(edgeCount) counts=\(counts.joined(separator: ","))\n")
     }
