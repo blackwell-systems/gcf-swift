@@ -32,6 +32,11 @@ final class ConformanceV2Test: XCTestCase {
         }
         files.sort { $0.path < $1.path }
         XCTAssertFalse(files.isEmpty, "no fixtures found in \(dir.path)")
+        // Floor assertion: a green run MUST have exercised the full shared suite. A
+        // present-but-short fixture set (mispathed or partial checkout) fails loudly.
+        // A wholly-absent directory throws XCTSkip above; in CI the separate gcf
+        // checkout step fails loudly if the repo cannot be cloned.
+        XCTAssertGreaterThanOrEqual(files.count, 150, "discovered only \(files.count) conformance fixtures, expected at least 150; the shared gcf fixture set is incomplete or mispathed")
 
         var ran = 0, skipped = 0
         for url in files {
