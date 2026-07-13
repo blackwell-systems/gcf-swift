@@ -56,13 +56,28 @@ public func encode(_ payload: Payload) -> String {
         }
     }
 
-    // Edges section.
+    // Edges section. Order edges by source ID then target ID (then edge type for
+    // parallel edges) so the wire is canonical regardless of the order edges were
+    // provided (SPEC 16.1). Edge reordering is decode-invariant (edges are a set)
+    // and does not affect pack_root, which sorts edge records independently.
     if !payload.edges.isEmpty {
-        b += "## edges [\(validEdges)]\n"
+        var resolved: [(srcIdx: Int, tgtIdx: Int, edgeType: String, status: String)] = []
+        resolved.reserveCapacity(validEdges)
         for e in payload.edges {
             guard let srcIdx = symIndex[e.source],
                   let tgtIdx = symIndex[e.target] else { continue }
-            var line = "@\(tgtIdx)<@\(srcIdx) \(e.edgeType)"
+            resolved.append((srcIdx, tgtIdx, e.edgeType, e.status))
+        }
+        // Sort by a fully-deterministic key tuple (srcIdx, tgtIdx, edgeType), so
+        // stability is not required (Swift's sorted(by:) is not guaranteed stable).
+        resolved.sort { a, b in
+            if a.srcIdx != b.srcIdx { return a.srcIdx < b.srcIdx }
+            if a.tgtIdx != b.tgtIdx { return a.tgtIdx < b.tgtIdx }
+            return a.edgeType < b.edgeType
+        }
+        b += "## edges [\(validEdges)]\n"
+        for e in resolved {
+            var line = "@\(e.tgtIdx)<@\(e.srcIdx) \(e.edgeType)"
             if !e.status.isEmpty && e.status != "unchanged" {
                 line += " \(e.status)"
             }
