@@ -48,7 +48,7 @@ final class ConformanceV2Test: XCTestCase {
                 continue
             }
             let op = fx["operation"] as? String ?? ""
-            if ["session", "delta", "pack-root", "delta-verify"].contains(op) || fx["inputBase64"] != nil {
+            if ["session", "delta", "delta-verify"].contains(op) || fx["inputBase64"] != nil {
                 skipped += 1
                 continue
             }
@@ -102,6 +102,10 @@ final class ConformanceV2Test: XCTestCase {
         case "error":
             let input = fx["input"] as? String ?? ""
             XCTAssertThrowsError(try decodeGeneric(input), rel)
+        case "pack-root":
+            let payload = toPayload(fx["input"])
+            XCTAssertEqual(packRoot(symbols: payload.symbols, edges: payload.edges),
+                           fx["expected"] as? String ?? "", rel)
         case "generic-pack-root":
             XCTAssertEqual(genericPackRoot(toSet(fx["input"])), fx["expected"] as? String ?? "", rel)
         case "generic-delta":
