@@ -4,7 +4,9 @@ import Foundation
 
 /// Runs the shared cross-SDK conformance fixtures (gcf/tests/conformance) against
 /// the Swift implementation, mirroring the TypeScript/Go/Rust/Python/Kotlin runners.
-/// Skips only session/delta/pack-root/delta-verify and binary inputs (as the others do).
+/// Skips only delta-verify (graph delta wire decoder not yet implemented) and binary
+/// inputs (as the others do). Every other operation is handled; an unhandled operation
+/// hard-fails via the switch's `default:` rather than passing silently.
 final class ConformanceV2Test: XCTestCase {
 
     /// The shared fixtures live in the sibling gcf repo. Resolve relative to this
@@ -48,7 +50,11 @@ final class ConformanceV2Test: XCTestCase {
                 continue
             }
             let op = fx["operation"] as? String ?? ""
-            if ["session", "delta", "delta-verify"].contains(op) || fx["inputBase64"] != nil {
+            // Binary inputs and the verify-only `delta-verify` operation are the only
+            // blanket skips. `session` and `delta` (encode) are handled below. A
+            // verify-shaped `delta` fixture (wire-string input or base_snapshot present)
+            // is detected inside runFixture and skipped there with an explicit reason.
+            if op == "delta-verify" || fx["inputBase64"] != nil {
                 skipped += 1
                 continue
             }
@@ -131,6 +137,10 @@ final class ConformanceV2Test: XCTestCase {
             }
         case "generic-delta-session":
             try runGenericDeltaSession(rel: rel, fx: fx)
+        case "session":
+            try runSession(rel: rel, fx: fx)
+        case "delta":
+            try runDelta(rel: rel, fx: fx)
         case "graph-stream-encode":
             // labeledTrailerCounts (SPEC 8.4.1) is supported; skip only if the
             // fixture requests some OTHER stream option this runner does not handle.
@@ -152,8 +162,70 @@ final class ConformanceV2Test: XCTestCase {
             enc.close()
             XCTAssertEqual(sink.text, expected, rel)
         default:
-            throw XCTSkip("unsupported operation: \(op)")
+            // No blanket fall-through: an operation with no case must be either
+            // handled or explicitly allow-listed for skipping. This fails loudly so a
+            // future op added to the shared fixtures cannot pass silently as a no-op.
+            XCTFail("unhandled operation: \(op); must be handled or allow-listed (\(rel))")
         }
+    }
+
+    /// Drives ONE `Session` through the fixture's ordered calls, asserting each
+    /// call's `encodeWithSession` output byte-for-byte against the expected wire.
+    /// Session state (stable IDs, transmitted set) carries across calls.
+    private func runSession(rel: String, fx: OrderedDictionary) throws {
+        let calls = fx["calls"] as? [Any] ?? []
+        let session = Session()
+        for (i, c) in calls.enumerated() {
+            guard let call = c as? OrderedDictionary else {
+                XCTFail("\(rel) call \(i): malformed call entry")
+                continue
+            }
+            let payload = toPayload(call["input"])
+            let expected = call["expected"] as? String ?? ""
+            let got = encodeWithSession(payload, session: session)
+            XCTAssertEqual(got, expected, "\(rel) call \(i)")
+        }
+    }
+
+    /// Handles the graph `delta` operation. graph-delta fixtures share this op name
+    /// but come in two shapes: an ENCODE scenario whose `input` is a DeltaPayload
+    /// object, and a VERIFY scenario whose `input` is a pre-encoded wire string (with
+    /// base_snapshot). The verify-shaped fixtures need the graph delta wire decoder,
+    /// which is not implemented, so they are routed to the delta-verify skip.
+    private func runDelta(rel: String, fx: OrderedDictionary) throws {
+        // Detect the verify-shaped fixture: input is a wire string, or a base_snapshot
+        // is present. Skip with the delta-verify allow-list reason.
+        if fx["input"] is String || fx["base_snapshot"] != nil {
+            throw XCTSkip("delta-verify: graph delta wire decoder not yet implemented (\(rel))")
+        }
+        let d = toDeltaPayload(fx["input"])
+        let expected = fx["expected"] as? String ?? ""
+        XCTAssertEqual(encodeDelta(d), expected, rel)
+    }
+
+    /// Build a graph DeltaPayload from a fixture input. removed/added carry only the
+    /// fields present in the fixture (qualifiedName/kind, plus score/provenance for
+    /// added); missing fields default via the Symbol/Edge initializers.
+    private func toDeltaPayload(_ v: Any?) -> DeltaPayload {
+        guard let od = v as? OrderedDictionary else { return DeltaPayload(tool: "", baseRoot: "", newRoot: "") }
+        func s(_ x: Any?) -> String { x as? String ?? "" }
+        func i(_ x: Any?) -> Int { (x as? NSNumber)?.intValue ?? 0 }
+        func d(_ x: Any?) -> Double { (x as? NSNumber)?.doubleValue ?? 0 }
+        func syms(_ key: String) -> [Symbol] {
+            (od[key] as? [Any] ?? []).compactMap { $0 as? OrderedDictionary }.map { sym in
+                Symbol(qualifiedName: s(sym["qualifiedName"]), kind: s(sym["kind"]),
+                       score: d(sym["score"]), provenance: s(sym["provenance"]))
+            }
+        }
+        func edges(_ key: String) -> [Edge] {
+            (od[key] as? [Any] ?? []).compactMap { $0 as? OrderedDictionary }.map { e in
+                Edge(source: s(e["source"]), target: s(e["target"]), edgeType: s(e["edgeType"]))
+            }
+        }
+        return DeltaPayload(tool: s(od["tool"]), baseRoot: s(od["baseRoot"]), newRoot: s(od["newRoot"]),
+                            removed: syms("removed"), added: syms("added"),
+                            removedEdges: edges("removedEdges"), addedEdges: edges("addedEdges"),
+                            deltaTokens: i(od["deltaTokens"]), fullTokens: i(od["fullTokens"]))
     }
 
     /// Drives a `GenericDeltaSession` through the fixture's updates and checks the

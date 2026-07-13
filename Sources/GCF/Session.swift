@@ -40,6 +40,14 @@ public class Session {
         }
     }
 
+    /// Returns the next available session ID without consuming it.
+    /// New symbols in a response are assigned IDs starting from this value.
+    public func nextSessionID() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return nextID
+    }
+
     /// Returns the number of symbols tracked in this session.
     public var size: Int {
         lock.lock()
@@ -67,21 +75,37 @@ public func encodeWithSession(_ payload: Payload, session: Session?) -> String {
 
     var b = ""
 
-    // Build local ID mapping for this response.
-    var localIndex: [String: Int] = [:]
-    for (i, s) in payload.symbols.enumerated() {
-        localIndex[s.qualifiedName] = i
+    // Header with session=true marker. Zero-valued budget/tokens and an empty
+    // edge set are omitted (matching the shared cross-SDK wire format).
+    b += "GCF profile=graph tool=\(payload.tool)"
+    if payload.tokenBudget > 0 {
+        b += " budget=\(payload.tokenBudget)"
     }
-
-    // Count valid edges.
-    let validEdges = payload.edges.filter { localIndex[$0.source] != nil && localIndex[$0.target] != nil }.count
-
-    // Header with session=true marker.
-    b += "GCF profile=graph tool=\(payload.tool) budget=\(payload.tokenBudget) tokens=\(payload.tokensUsed) symbols=\(payload.symbols.count) edges=\(validEdges) session=true"
+    if payload.tokensUsed > 0 {
+        b += " tokens=\(payload.tokensUsed)"
+    }
+    b += " symbols=\(payload.symbols.count)"
+    if !payload.edges.isEmpty {
+        b += " edges=\(payload.edges.count)"
+    }
+    b += " session=true"
     if !payload.packRoot.isEmpty {
         b += " pack_root=\(payload.packRoot)"
     }
     b += "\n"
+
+    // Build ID mapping using session-stable IDs. Known symbols keep their
+    // existing session ID; new symbols get the next available session IDs in
+    // payload order. IDs stay stable across calls within a session.
+    var localIndex: [String: Int] = [:]
+    for s in payload.symbols where session.transmitted(s.qualifiedName) {
+        localIndex[s.qualifiedName] = session.getID(s.qualifiedName)
+    }
+    var nextNew = session.nextSessionID()
+    for s in payload.symbols where !session.transmitted(s.qualifiedName) {
+        localIndex[s.qualifiedName] = nextNew
+        nextNew += 1
+    }
 
     // Group by distance.
     let groups = groupByDistance(payload.symbols)
@@ -112,7 +136,7 @@ public func encodeWithSession(_ payload: Payload, session: Session?) -> String {
 
     // Edges section.
     if !payload.edges.isEmpty {
-        b += "## edges [\(validEdges)]\n"
+        b += "## edges [\(payload.edges.count)]\n"
         for e in payload.edges {
             guard let srcIdx = localIndex[e.source],
                   let tgtIdx = localIndex[e.target] else { continue }
