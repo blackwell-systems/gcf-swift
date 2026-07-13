@@ -50,11 +50,9 @@ final class ConformanceV2Test: XCTestCase {
                 continue
             }
             let op = fx["operation"] as? String ?? ""
-            // Binary inputs and the verify-only `delta-verify` operation are the only
-            // blanket skips. `session` and `delta` (encode) are handled below. A
-            // verify-shaped `delta` fixture (wire-string input or base_snapshot present)
-            // is detected inside runFixture and skipped there with an explicit reason.
-            if op == "delta-verify" || fx["inputBase64"] != nil {
+            // Binary inputs are the only blanket skip. `session`, `delta` (encode),
+            // and `delta-verify` (graph delta decode + verify) are all handled below.
+            if fx["inputBase64"] != nil {
                 skipped += 1
                 continue
             }
@@ -139,7 +137,7 @@ final class ConformanceV2Test: XCTestCase {
             try runGenericDeltaSession(rel: rel, fx: fx)
         case "session":
             try runSession(rel: rel, fx: fx)
-        case "delta":
+        case "delta", "delta-verify":
             try runDelta(rel: rel, fx: fx)
         case "graph-stream-encode":
             // labeledTrailerCounts (SPEC 8.4.1) is supported; skip only if the
@@ -187,20 +185,72 @@ final class ConformanceV2Test: XCTestCase {
         }
     }
 
-    /// Handles the graph `delta` operation. graph-delta fixtures share this op name
-    /// but come in two shapes: an ENCODE scenario whose `input` is a DeltaPayload
-    /// object, and a VERIFY scenario whose `input` is a pre-encoded wire string (with
-    /// base_snapshot). The verify-shaped fixtures need the graph delta wire decoder,
-    /// which is not implemented, so they are routed to the delta-verify skip.
+    /// Handles the graph `delta` / `delta-verify` operations. graph-delta fixtures
+    /// come in two shapes: an ENCODE scenario whose `input` is a DeltaPayload object
+    /// (assert `encodeDelta` matches the expected wire), and a VERIFY scenario whose
+    /// `input` is a pre-encoded wire string with a `base_snapshot` (decode the wire,
+    /// apply it to the base, and check the recomputed pack_root or the expected error).
     private func runDelta(rel: String, fx: OrderedDictionary) throws {
-        // Detect the verify-shaped fixture: input is a wire string, or a base_snapshot
-        // is present. Skip with the delta-verify allow-list reason.
+        // Verify-shaped: input is a wire string, or a base_snapshot is present.
         if fx["input"] is String || fx["base_snapshot"] != nil {
-            throw XCTSkip("delta-verify: graph delta wire decoder not yet implemented (\(rel))")
+            try runDeltaVerify(rel: rel, fx: fx)
+            return
         }
         let d = toDeltaPayload(fx["input"])
         let expected = fx["expected"] as? String ?? ""
         XCTAssertEqual(encodeDelta(d), expected, rel)
+    }
+
+    /// Decode a graph delta wire string, apply it to the base_snapshot, and verify.
+    /// If `expectedError` is present, assert the decode/verify throws with a matching
+    /// error code (e.g. root_mismatch). Otherwise assert success and that the applied
+    /// snapshot's pack_root matches the expected_snapshot's pack_root.
+    private func runDeltaVerify(rel: String, fx: OrderedDictionary) throws {
+        let wire = fx["input"] as? String ?? ""
+        let baseSnap = fx["base_snapshot"] as? OrderedDictionary
+        let baseSymbols = snapshotSymbols(baseSnap?["symbols"])
+        let baseEdges = snapshotEdges(baseSnap?["edges"])
+
+        let apply: () throws -> (symbols: [Symbol], edges: [Edge]) = {
+            let d = try decodeDelta(wire)
+            return try verifyDelta(baseSymbols: baseSymbols, baseEdges: baseEdges,
+                                   removed: d.removed, added: d.added,
+                                   removedEdges: d.removedEdges, addedEdges: d.addedEdges,
+                                   expectedNewRoot: d.newRoot)
+        }
+
+        if let expErr = fx["expectedError"] as? String {
+            XCTAssertThrowsError(try apply(), rel) { err in
+                XCTAssertTrue("\(err)".contains(expErr), "\(rel): expected '\(expErr)', got \(err)")
+            }
+        } else {
+            let result = try apply()
+            let expSnap = fx["expected_snapshot"] as? OrderedDictionary
+            let expSymbols = snapshotSymbols(expSnap?["symbols"])
+            let expEdges = snapshotEdges(expSnap?["edges"])
+            XCTAssertEqual(packRoot(symbols: result.symbols, edges: result.edges),
+                           packRoot(symbols: expSymbols, edges: expEdges), rel)
+        }
+    }
+
+    /// Parse a base_snapshot / expected_snapshot `symbols` array into [Symbol].
+    private func snapshotSymbols(_ v: Any?) -> [Symbol] {
+        func s(_ x: Any?) -> String { x as? String ?? "" }
+        func i(_ x: Any?) -> Int { (x as? NSNumber)?.intValue ?? 0 }
+        func d(_ x: Any?) -> Double { (x as? NSNumber)?.doubleValue ?? 0 }
+        return (v as? [Any] ?? []).compactMap { $0 as? OrderedDictionary }.map { sym in
+            Symbol(qualifiedName: s(sym["qualifiedName"]), kind: s(sym["kind"]),
+                   score: d(sym["score"]), provenance: s(sym["provenance"]),
+                   distance: i(sym["distance"]))
+        }
+    }
+
+    /// Parse a base_snapshot / expected_snapshot `edges` array into [Edge].
+    private func snapshotEdges(_ v: Any?) -> [Edge] {
+        func s(_ x: Any?) -> String { x as? String ?? "" }
+        return (v as? [Any] ?? []).compactMap { $0 as? OrderedDictionary }.map { e in
+            Edge(source: s(e["source"]), target: s(e["target"]), edgeType: s(e["edgeType"]))
+        }
     }
 
     /// Build a graph DeltaPayload from a fixture input. removed/added carry only the
