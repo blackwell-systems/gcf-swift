@@ -205,6 +205,8 @@ public enum GCFError: Error, CustomStringConvertible {
     case countMismatch(Int, Int)
     case invalidCount(String)
     case orphanAttachment(String)
+    case orphanInlineAttachment(String)
+    case invalidLine(String)
     case missingAttachment(String)
     case duplicateAttachment(String)
     case invalidItemId(Int, String)
@@ -233,6 +235,8 @@ public enum GCFError: Error, CustomStringConvertible {
         case .countMismatch(let d, let a): return "count_mismatch: declared \(d), got \(a)"
         case .invalidCount(let s): return "invalid_count: \(s)"
         case .orphanAttachment(let s): return "orphan_attachment: \(s)"
+        case .orphanInlineAttachment(let s): return "orphan_inline_attachment: \(s)"
+        case .invalidLine(let s): return "invalid_line: unexpected content in object body: \(s)"
         case .missingAttachment(let f): return "missing_attachment: \(f)"
         case .duplicateAttachment(let f): return "duplicate_attachment: \(f)"
         case .invalidItemId(let e, let g): return "invalid_item_id: expected @\(e), got @\(g)"
