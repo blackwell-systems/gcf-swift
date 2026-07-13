@@ -133,9 +133,11 @@ public class StreamEncoder {
         // Build ordered label:count sections, then emit either the labeled form
         // (SPEC §8.4.1, opt-in) or the default positional values-only form.
         var sections: [(String, Int)] = groupCounts.filter { $0.1 > 0 }
-        if edgeCount > 0 {
-            sections.append(("edges", edgeCount))
-        }
+        // The edge count is always the last counts entry, even when 0 (SPEC §8.4,
+        // §8.4.1): it keeps the positional form unambiguous and anchors the labeled
+        // form (minimal counts=edges:0). Zero-count distance groups are omitted, but
+        // edges is not.
+        sections.append(("edges", edgeCount))
         let counts: [String]
         if labeledTrailerCounts {
             counts = sections.map { "\($0.0):\($0.1)" }
