@@ -443,6 +443,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         i += 1
 
         let allAttFields = traditionalAttFields + inlineAttFields
+        let expectedAtt = Set(allAttFields)
         let attachmentValues = OrderedDictionary()
 
         if rowHasID {
@@ -466,6 +467,13 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                 if ac.hasPrefix(".") {
                     let rest = String(ac.dropFirst())
                     let (attName, afterNameR) = parseAttachmentName(rest)
+
+                    // Reject orphan attachments: a .fieldname that does not bind to a
+                    // ^-marked column of this row, unless it is a ">" flatten-fallback
+                    // attachment (SPEC 7.4.6.1.4).
+                    if !expectedAtt.contains(attName) && !attName.contains(">") {
+                        throw GCFError.orphanAttachment(attName)
+                    }
 
                     // Check for duplicate attachment.
                     if attachmentValues[attName] != nil {
