@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="assets/gcf-swift-diagram.png" alt="gcf-swift" width="100%">
+  <img src="assets/gcf-hero-wire-delta.png" alt="gcf-swift" width="760">
 </p>
 
 <p align="center">
-  <a href="https://github.com/blackwell-systems"><img src="https://raw.githubusercontent.com/blackwell-systems/blackwell-docs-theme/main/badge-trademark.svg" alt="Blackwell Systems"></a>
-  <a href="https://github.com/blackwell-systems/gcf-swift/actions"><img src="https://github.com/blackwell-systems/gcf-swift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://gcformat.com/playground.html"><img src="https://img.shields.io/badge/playground-live-2563eb?style=for-the-badge" alt="Playground"></a>
+  <a href="https://gcformat.com/guide/benchmarks.html"><img src="https://img.shields.io/badge/benchmarks-2%2C500%2B%20evals-22c55e?style=for-the-badge" alt="Benchmarks"></a>
+  <a href="https://github.com/blackwell-systems/gcf-swift"><img src="https://img.shields.io/badge/SwiftPM-compatible-FA7343?style=for-the-badge&logo=swift&logoColor=white" alt="SwiftPM"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-333?style=for-the-badge" alt="License"></a>
 </p>
 
 # gcf-swift
