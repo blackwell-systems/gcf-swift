@@ -11,7 +11,7 @@
 
 # gcf-swift
 
-Swift implementation of [GCF](https://gcformat.com/) -- the most token-efficient wire format for LLMs. A drop-in alternative to JSON and TOON for any structured data.
+Swift implementation of [GCF](https://gcformat.com/), the most token-efficient wire format for LLMs. A drop-in alternative to JSON and TOON for any structured data.
 
 <p align="center">
   <img src="assets/gcf-swift-diagram.png" alt="gcf-swift" width="80%">
