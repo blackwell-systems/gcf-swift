@@ -190,7 +190,7 @@ private struct FlatLeaf {
 
 private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: String) -> [FlatLeaf]? {
     // Field names containing ">" cannot be flattened (would create ambiguous paths).
-    if fieldName.contains(">") { return nil }
+    if fieldName.isEmpty || fieldName.contains(">") { return nil } // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
     var canonicalShape: [String: String]? = nil // key -> "scalar" | "nested"
     var canonicalKeys: [String]? = nil
 
@@ -214,7 +214,7 @@ private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: Str
         if canonicalShape == nil {
             var shape: [String: String] = [:]
             for (k, val) in obj {
-                if k.contains(">") { return nil }
+                if k.isEmpty || k.contains(">") { return nil } // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
                 if val is [Any] { return nil }
                 if asOrderedDict(val) != nil {
                     shape[k] = "nested"
