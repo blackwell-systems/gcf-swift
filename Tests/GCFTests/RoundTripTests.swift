@@ -168,14 +168,19 @@ indirect enum FlatShape {
     case nested([(String, FlatShape)])
 }
 
-func genFlatShape(_ rng: inout SeededRNG, depth: Int, maxDepth: Int) -> FlatShape {
+/// A closure that produces a key for a nested/top-level field, threaded so the
+/// flatten generators can be reused with either the bare-key generator (the
+/// original behavior) or an adversarial one that emits empty/">" keys.
+typealias KeyGen = (inout SeededRNG) -> String
+
+func genFlatShape(_ rng: inout SeededRNG, depth: Int, maxDepth: Int, keyGen: KeyGen = genBareKey) -> FlatShape {
     if depth >= maxDepth || rng.nextDouble() < 0.45 { return .scalar }
     var sub: [(String, FlatShape)] = []
     var seen = Set<String>()
     for _ in 0..<(1 + rng.nextInt(3)) {
-        let k = genBareKey(&rng)
+        let k = keyGen(&rng)
         if seen.insert(k).inserted {
-            sub.append((k, genFlatShape(&rng, depth: depth + 1, maxDepth: maxDepth)))
+            sub.append((k, genFlatShape(&rng, depth: depth + 1, maxDepth: maxDepth, keyGen: keyGen)))
         }
     }
     return sub.isEmpty ? .scalar : .nested(sub)
@@ -202,20 +207,25 @@ func materializeFlatShape(_ rng: inout SeededRNG, _ shape: FlatShape) -> Any {
     }
 }
 
-func genFlattenableArray(_ rng: inout SeededRNG) -> [Any] {
+func genFlattenableArray(_ rng: inout SeededRNG, keyGen: KeyGen = genBareKey) -> [Any] {
     var schema: [(String, FlatShape)] = [("id", .scalar)]
     var seen: Set<String> = ["id"]
     var hasNested = false
     for _ in 0..<(1 + rng.nextInt(3)) {
-        let k = genBareKey(&rng)
+        let k = keyGen(&rng)
         if !seen.insert(k).inserted { continue }
-        let s = genFlatShape(&rng, depth: 1, maxDepth: 3)
+        let s = genFlatShape(&rng, depth: 1, maxDepth: 3, keyGen: keyGen)
         if case .nested = s { hasNested = true }
         schema.append((k, s))
     }
     if !hasNested {
-        let k = genBareKey(&rng)
-        schema.append((k, .nested([(genBareKey(&rng), .nested([(genBareKey(&rng), .scalar)]))])))
+        // Guarantee at least one nested field so flatten triggers. Mirror the Go
+        // fallback: only add it when its key is not already present, since the
+        // adversarial key generator collides on empty/">" keys often.
+        let k = keyGen(&rng)
+        if seen.insert(k).inserted {
+            schema.append((k, .nested([(keyGen(&rng), .nested([(keyGen(&rng), .scalar)]))])))
+        }
     }
     let rows = 2 + rng.nextInt(6)
     var arr: [Any] = []
@@ -234,6 +244,19 @@ func genFlattenableArray(_ rng: inout SeededRNG) -> [Any] {
         arr.append(od)
     }
     return arr
+}
+
+// MARK: - Adversarial flatten-key generator
+
+/// Alphabet of keys that stress the SPEC 7.4.6.1.3 path-ambiguity guard: the
+/// empty key and every arrangement of ">" (leading, trailing, bare, doubled)
+/// mixed with plain keys so flatten still triggers on the surviving fields.
+let adversarialFlattenKeys = [
+    "", ">", ">>", "a>b", "a>", ">b", ">a>", "a>>b", "a", "b", "c", "id", "m", "n",
+]
+
+func genAdversarialFlattenKey(_ rng: inout SeededRNG) -> String {
+    return adversarialFlattenKeys[rng.nextInt(adversarialFlattenKeys.count)]
 }
 
 // MARK: - Adversarial Generators
@@ -493,6 +516,49 @@ final class RoundTripTests: XCTestCase {
             }
         }
         print("PASS: \(iterations) aligned nested arrays round-tripped successfully")
+    }
+
+    /// Same flatten path as testPropertyRoundTripFlatten, but the nested/top-level
+    /// keys are drawn from an alphabet that includes the empty key and every ">"
+    /// arrangement. Before the empty-key exclusion was added to analyzeFlattenable
+    /// (SPEC 7.4.6.1.3), an empty path segment produced a leading/trailing/bare ">"
+    /// column the decoder could not invert, silently corrupting the round-trip. This
+    /// test exercises exactly that guard.
+    func testFlattenRoundTripAdversarialKeys() throws {
+        let iterations = getIterations()
+        var rng = SeededRNG(seed: 20260806)
+        var sawEmpty = false
+        var sawGT = false
+        for i in 0..<iterations {
+            let val = genFlattenableArray(&rng, keyGen: genAdversarialFlattenKey)
+            // Liveness: confirm the generator actually emits empty and ">" keys at
+            // the top level, so a passing run truly exercises the guard.
+            for row in val {
+                if let od = row as? OrderedDictionary {
+                    for (k, _) in od.orderedPairs {
+                        if k.isEmpty { sawEmpty = true }
+                        if k.contains(">") { sawGT = true }
+                    }
+                }
+            }
+            for noFlatten in [false, true] {
+                let gcfText = encodeGeneric(val, opts: GenericOptions(noFlatten: noFlatten))
+                let decoded: Any
+                do {
+                    decoded = try decodeGeneric(gcfText)
+                } catch {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): decode failed: \(error)\n  input: \(valueToJSON(val))\n  gcf: \(String(gcfText.prefix(500)))")
+                    return
+                }
+                if !deepEqual(val, decoded) {
+                    XCTFail("iteration \(i) noFlatten=\(noFlatten): round-trip mismatch\n  input:   \(valueToJSON(val))\n  gcf:     \(String(gcfText.prefix(500)))\n  decoded: \(valueToJSON(decoded))")
+                    return
+                }
+            }
+        }
+        XCTAssertTrue(sawEmpty, "generator never produced an empty top-level key; adversarial coverage is dead")
+        XCTAssertTrue(sawGT, "generator never produced a \">\" top-level key; adversarial coverage is dead")
+        print("PASS: \(iterations) adversarial-key flatten arrays round-tripped (sawEmpty=\(sawEmpty) sawGT=\(sawGT))")
     }
 
     func testPropertyRoundTripAdversarial() throws {
