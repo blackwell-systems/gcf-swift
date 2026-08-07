@@ -198,7 +198,9 @@ private struct FlatLeaf {
 
 private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: String) -> [FlatLeaf]? {
     // Field names containing ">" cannot be flattened (would create ambiguous paths).
-    if fieldName.isEmpty || fieldName.contains(">") { return nil } // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
+    // Checked on scalars so a ">" adjacent to a grapheme-extending scalar still
+    // disqualifies flattening (SPEC 2.4, 7.4.6.1.3).
+    if fieldName.isEmpty || fieldName.unicodeScalars.contains(">") { return nil }
     var canonicalShape: [String: String]? = nil // key -> "scalar" | "nested"
     var canonicalKeys: [String]? = nil
 
@@ -222,7 +224,7 @@ private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: Str
         if canonicalShape == nil {
             var shape: [String: String] = [:]
             for (k, val) in obj {
-                if k.isEmpty || k.contains(">") { return nil } // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
+                if k.isEmpty || k.unicodeScalars.contains(">") { return nil } // empty/">" -> ambiguous path (SPEC 2.4, 7.4.6.1.3)
                 if val is [Any] { return nil }
                 if asOrderedDict(val) != nil {
                     shape[k] = "nested"
@@ -251,7 +253,10 @@ private func analyzeFlattenable(_ arr: [Any], fieldName: String, parentPath: Str
     guard let shape = canonicalShape, let ck = canonicalKeys else { return nil }
 
     let currentPath = parentPath.isEmpty ? fieldName : "\(parentPath)>\(fieldName)"
-    let parentKeys = parentPath.isEmpty ? [fieldName] : parentPath.split(separator: ">").map(String.init) + [fieldName]
+    // Split the accumulated path on scalars: a segment beginning with a
+    // grapheme-extending scalar would otherwise cluster with the preceding ">"
+    // join and mis-split the reconstructed key list (SPEC 2.4).
+    let parentKeys = parentPath.isEmpty ? [fieldName] : scalarSplitNonEmpty(parentPath, ">") + [fieldName]
 
     var leaves: [FlatLeaf] = []
     for k in ck {
@@ -316,8 +321,9 @@ func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: in
     }
 
     // Fields whose names contain ">" must not appear as tabular columns
-    // because the decoder would interpret them as flattened path columns.
-    let gtFields = Set(fields.filter { flattenMap[$0] == nil && $0.contains(">") })
+    // because the decoder would interpret them as flattened path columns. Checked
+    // on scalars so a ">" adjacent to a grapheme-extending scalar is caught (SPEC 2.4).
+    let gtFields = Set(fields.filter { flattenMap[$0] == nil && $0.unicodeScalars.contains(">") })
 
     // Build expanded column list.
     struct Col { let header: String; let type: String; let field: String; let keys: [String] }

@@ -56,7 +56,7 @@ func keyedMapEligible(_ value: Any) -> KeyedMapPlan? {
     // field contains ">", the keyed form would have only the key column, which is
     // invalid. Such a map uses Section 7.2 section encoding instead, the object
     // analogue of an array falling back to expanded form.
-    if !valueFields.contains(where: { !$0.contains(">") }) { return nil }
+    if !valueFields.contains(where: { !$0.unicodeScalars.contains(">") }) { return nil }
 
     // Key-column label: "key", made unique by prepending "_" on collision.
     var keyLabel = "key"

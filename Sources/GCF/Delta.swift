@@ -64,11 +64,16 @@ public func encodeDelta(_ delta: DeltaPayload) -> String {
 
 /// Parse a `source -> target type` delta edge line.
 private func parseDeltaEdge(_ line: String) throws -> Edge {
-    guard let range = line.range(of: " -> ") else {
+    // Locate the " -> " separator over unicode scalars: a target beginning with a
+    // grapheme-extending scalar would otherwise cluster with the trailing space
+    // and be misread (SPEC 2.4).
+    guard let lo = scalarRangeStart(line, " -> ") else {
         throw DeltaError("malformed_delta: edge line missing ' -> ': \(line)")
     }
-    let source = String(line[line.startIndex..<range.lowerBound])
-    let rest = line[range.upperBound...].split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+    let lv = line.unicodeScalars
+    let source = String(lv[lv.startIndex..<lo])
+    let afterSep = lv.index(lo, offsetBy: 4) // past " -> "
+    let rest = fields(String(lv[afterSep...]))
     guard rest.count == 2 else {
         throw DeltaError("malformed_delta: edge line \(line) must be 'source -> target type'")
     }
@@ -76,8 +81,39 @@ private func parseDeltaEdge(_ line: String) throws -> Edge {
 }
 
 /// Split a line on runs of ASCII whitespace (mirrors Go's strings.Fields).
+/// Operates on unicode scalars so a field beginning with a grapheme-extending
+/// scalar is not merged with its whitespace delimiter (SPEC 2.4).
 private func fields(_ line: String) -> [String] {
-    line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+    var parts: [String] = []
+    var current: [Unicode.Scalar] = []
+    for c in line.unicodeScalars {
+        if c == " " || c == "\t" {
+            if !current.isEmpty { parts.append(String(String.UnicodeScalarView(current))); current = [] }
+        } else {
+            current.append(c)
+        }
+    }
+    if !current.isEmpty { parts.append(String(String.UnicodeScalarView(current))) }
+    return parts
+}
+
+/// Returns the scalar-view index where the scalars of `needle` first occur in
+/// `s`, or nil. Used to find multi-scalar separators without grapheme clustering.
+private func scalarRangeStart(_ s: String, _ needle: String) -> String.UnicodeScalarView.Index? {
+    let sv = s.unicodeScalars
+    let nv = Array(needle.unicodeScalars)
+    if nv.isEmpty { return sv.startIndex }
+    var i = sv.startIndex
+    while i < sv.endIndex {
+        var j = i
+        var k = 0
+        while k < nv.count, j < sv.endIndex, sv[j] == nv[k] {
+            j = sv.index(after: j); k += 1
+        }
+        if k == nv.count { return i }
+        i = sv.index(after: i)
+    }
+    return nil
 }
 
 /// Parse a GCF graph delta wire payload (as produced by encodeDelta) back into a
@@ -85,21 +121,26 @@ private func fields(_ line: String) -> [String] {
 /// full form so the result matches a base snapshot's symbol identities. Mirrors
 /// the Go reference `DecodeDelta`.
 func decodeDelta(_ wire: String) throws -> DeltaPayload {
-    let trimmed = String(wire.reversed().drop(while: { $0 == "\n" }).reversed())
-    let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    // Split on newlines and detect structural markers over unicode scalars so a
+    // line or field adjacent to a grapheme-extending scalar is not misread (SPEC 2.4).
+    var tv = Array(wire.unicodeScalars)
+    while let last = tv.last, last == "\n" { tv.removeLast() }
+    let trimmed = String(String.UnicodeScalarView(tv))
+    let lines = scalarSplit(trimmed, "\n")
     guard let first = lines.first, !first.isEmpty else {
         throw DeltaError("missing_header: empty delta payload")
     }
-    let header = first.hasSuffix("\r") ? String(first.dropLast()) : first
-    guard header.hasPrefix("GCF profile=graph") else {
+    let header = scalarHasSuffix(first, "\r") ? String(first.unicodeScalars.dropLast()) : first
+    guard scalarHasPrefix(header, "GCF profile=graph") else {
         throw DeltaError("missing_profile: delta header must begin with 'GCF profile=graph'")
     }
 
     var tool = "", baseRoot = "", newRoot = ""
     for field in fields(header) {
-        guard let eq = field.firstIndex(of: "=") else { continue }
-        let key = String(field[field.startIndex..<eq])
-        let value = String(field[field.index(after: eq)...])
+        guard let eq = scalarFirstIndex(field, "=") else { continue }
+        let fv = field.unicodeScalars
+        let key = String(fv[fv.startIndex..<eq])
+        let value = String(fv[fv.index(after: eq)...])
         switch key {
         case "tool": tool = value
         case "base_root": baseRoot = value
@@ -113,10 +154,10 @@ func decodeDelta(_ wire: String) throws -> DeltaPayload {
 
     var section = ""
     for raw in lines.dropFirst() {
-        let line = raw.hasSuffix("\r") ? String(raw.dropLast()) : raw
+        let line = scalarHasSuffix(raw, "\r") ? String(raw.unicodeScalars.dropLast()) : raw
         if line.isEmpty { continue }
-        if line.hasPrefix("## ") {
-            section = line.dropFirst(3).trimmingCharacters(in: .whitespaces)
+        if scalarHasPrefix(line, "## ") {
+            section = scalarDropFirst(line, 3).trimmingCharacters(in: .whitespaces)
             switch section {
             case "removed", "added", "edges_removed", "edges_added": break
             default: throw DeltaError("malformed_delta: unknown section \(section)")

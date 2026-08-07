@@ -20,12 +20,19 @@ public func needsQuote(_ s: String) -> Bool {
     if s == "-" || s == "~" || s == "^" || s == "true" || s == "false" { return true }
     // A value shaped like an inline-schema attachment marker (^{...}) would decode
     // as an attachment and lose the string, so it must be quoted (SPEC 2.4).
-    if s.count >= 3 && s.hasPrefix("^{") && s.hasSuffix("}") { return true }
+    // Checked on scalars so a "^{...}" whose "^" or "}" is adjacent to a
+    // grapheme-extending scalar is still detected.
+    if s.unicodeScalars.count >= 3 && scalarHasPrefix(s, "^{") && scalarHasSuffix(s, "}") { return true }
     let range = NSRange(s.startIndex..., in: s)
     if jsonNumberPattern.firstMatch(in: s, range: range) != nil { return true }
     if numericLikePattern.firstMatch(in: s, range: range) != nil { return true }
-    if s.first == " " || s.last == " " { return true }
-    if s.first == "#" || s.first == "@" || s.first == "." { return true }
+    // Detect leading/trailing structural characters on unicode scalars: a value
+    // whose leading/trailing structural char is adjacent to a grapheme-extending
+    // scalar (for example " " + U+0ACC) would otherwise cluster into one Character
+    // and escape detection, so the value would be emitted unquoted and could not
+    // round-trip (SPEC 2.4: scalars are code points).
+    if s.unicodeScalars.first == " " || s.unicodeScalars.last == " " { return true }
+    if let f = s.unicodeScalars.first, f == "#" || f == "@" || f == "." { return true }
     if inlineArrayPattern.firstMatch(in: s, range: range) != nil { return true }
     for c in s.unicodeScalars {
         if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
@@ -81,7 +88,13 @@ public func formatScalar(_ value: Any?, delimiter: Character = "\0") -> String {
     if let i = value as? Int { return String(i) }
     if let d = value as? Double { return formatNumber(d) }
     let s = "\(value)"
-    if needsQuote(s) || (delimiter != "\0" && s.contains(delimiter)) {
+    // Compare the active delimiter on unicode scalars: a delimiter adjacent to a
+    // grapheme-extending scalar in the value would not be found by the
+    // grapheme-based String.contains (SPEC 2.4). (needsQuote already covers the
+    // canonical "|" and "," delimiters via its scalar loop; this guards any other
+    // delimiter passed in.)
+    let delimScalar = delimiter.unicodeScalars.first
+    if needsQuote(s) || (delimiter != "\0" && delimScalar != nil && s.unicodeScalars.contains(delimScalar!)) {
         return quoteString(s)
     }
     return s

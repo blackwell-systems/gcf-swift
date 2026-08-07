@@ -42,7 +42,7 @@ public class GenericStreamEncoder {
             endArrayLocked()
         }
         for f in fields {
-            if f.contains(">") {
+            if f.unicodeScalars.contains(">") {
                 pendingError = .invalidFieldDeclaration(
                     "streaming field name '\(f)' contains '>' (a flattened path is not representable in a streaming row)")
                 return
@@ -70,7 +70,7 @@ public class GenericStreamEncoder {
             endArrayLocked()
         }
         for f in valueFields {
-            if f.contains(">") {
+            if f.unicodeScalars.contains(">") {
                 pendingError = .invalidFieldDeclaration(
                     "streaming field name '\(f)' contains '>' (a flattened path is not representable in a streaming row)")
                 return
