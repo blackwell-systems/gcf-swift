@@ -606,9 +606,23 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             }
         }
 
-        // Build row in field order.
+        // Reconstruct the row in declared field-union order. A flattened group is
+        // emitted at the position of its first path column, so the nested object
+        // reappears where the original field was, not appended at the end (SPEC
+        // 7.4.6.1 step 7 and the key-order preservation requirement, SPEC 52, 931).
+        let nested = pathColumnMap.isEmpty
+            ? OrderedDictionary()
+            : unflattenPaths(pathColumnMap, orderedFields: fields, flatValues: flatValues, flatAbsent: flatAbsent)
+        var emittedGroups = Set<String>()
         let row = OrderedDictionary()
         for f in fields {
+            if let paths = pathColumnMap[f] {
+                let top = paths[0]
+                if emittedGroups.contains(top) { continue }
+                emittedGroups.insert(top)
+                if let v = nested[top] { row[top] = v }  // omitted when the whole group is absent
+                continue
+            }
             if missingFields.contains(f) { continue }
             if let v = cellValues[f] { row[f] = v; continue }
             if let v = attachmentValues[f] { row[f] = v; continue }
@@ -616,13 +630,6 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         // Also add any orphan attachment values (fields excluded from column list, e.g. ">" fields).
         for (k, v) in attachmentValues.orderedPairs {
             if row[k] == nil { row[k] = v }
-        }
-        // Unflatten path columns into nested objects.
-        if !pathColumnMap.isEmpty {
-            let nested = unflattenPaths(pathColumnMap, flatValues: flatValues, flatAbsent: flatAbsent)
-            for (k, v) in nested.orderedPairs {
-                row[k] = v
-            }
         }
 
         rows.append(row)
@@ -633,13 +640,17 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
 }
 
 private func unflattenPaths(_ pathColumns: [String: [String]],
+                            orderedFields: [String],
                             flatValues: [String: Any],
                             flatAbsent: Set<String>) -> OrderedDictionary {
-    // Group by top-level parent.
+    // Group by top-level parent, walking fields in declared path-column order so
+    // both the group order and the nested leaf order follow the header (SPEC 905:
+    // flattened columns reconstruct in nested key order). Iterating the unordered
+    // pathColumns map instead would sort leaves nondeterministically.
     var groups: [String: [String]] = [:]
     var groupOrder: [String] = []
-    for (fieldName, paths) in pathColumns {
-        guard !paths.isEmpty else { continue }
+    for fieldName in orderedFields {
+        guard let paths = pathColumns[fieldName], !paths.isEmpty else { continue }
         let top = paths[0]
         if groups[top] == nil {
             groups[top] = []
