@@ -27,7 +27,10 @@ public enum DecodeError: Error, Equatable, CustomStringConvertible {
 
 /// Decode parses GCF text back into a Payload.
 public func decode(_ input: String) throws -> Payload {
-    let lines = input.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    // Split on newlines over scalars: a line whose first scalar is
+    // grapheme-extending must not cluster with the preceding "\n" and swallow the
+    // line break (SPEC 2.4).
+    let lines = scalarSplit(input.replacingOccurrences(of: "\r\n", with: "\n"), "\n")
     guard !lines.isEmpty else {
         throw DecodeError.emptyInput
     }
@@ -36,13 +39,13 @@ public func decode(_ input: String) throws -> Payload {
 
     // Parse header.
     let header = lines[0]
-    guard header.hasPrefix("GCF ") else {
+    guard scalarHasPrefix(header, "GCF ") else {
         throw DecodeError.invalidHeader(header)
     }
-    parseHeader(String(header.dropFirst(4)), &p)
+    parseHeader(scalarDropFirst(header, 4), &p)
     // v3.1: tool field is optional (SHOULD be present for MCP tool responses, not required).
 
-    let isDelta = header.contains("delta=true")
+    let isDelta = scalarContains(header, "delta=true")
     let validDeltaSections: Set<String> = ["removed", "added", "edges_removed", "edges_added"]
 
     // Parse body: symbols and edges.
@@ -52,18 +55,29 @@ public func decode(_ input: String) throws -> Payload {
     var inEdges = false
 
     for line in lines.dropFirst() {
-        let trimmed = line.hasSuffix("\r") ? String(line.dropLast()) : line
+        let trimmed = scalarHasSuffix(line, "\r") ? String(line.unicodeScalars.dropLast()) : line
         if trimmed.isEmpty { continue }
 
         // Skip ##! summary trailer.
-        if trimmed.hasPrefix("##! ") { continue }
+        if scalarHasPrefix(trimmed, "##! ") { continue }
 
         // Group header.
-        if trimmed.hasPrefix("## ") {
-            var group = String(trimmed.dropFirst(3))
-            // Strip bracket suffix: "edges [200]" -> "edges"
-            if let bracketIdx = group.range(of: " [") {
-                group = String(group[..<bracketIdx.lowerBound])
+        if scalarHasPrefix(trimmed, "## ") {
+            var group = scalarDropFirst(trimmed, 3)
+            // Strip bracket suffix: "edges [200]" -> "edges". Locate the " ["
+            // delimiter over scalars so a group name adjacent to a
+            // grapheme-extending scalar is not misread (SPEC 2.4).
+            let gv = group.unicodeScalars
+            var gi = gv.startIndex
+            while gi < gv.endIndex {
+                if gv[gi] == " " {
+                    let nxt = gv.index(after: gi)
+                    if nxt < gv.endIndex && gv[nxt] == "[" {
+                        group = String(gv[gv.startIndex..<gi])
+                        break
+                    }
+                }
+                gi = gv.index(after: gi)
             }
             if isDelta && !validDeltaSections.contains(group) {
                 throw DecodeError.malformedDelta("invalid delta section \"\(group)\"")
@@ -75,8 +89,8 @@ public func decode(_ input: String) throws -> Payload {
                 case "related": currentDistance = 1
                 case "extended": currentDistance = 2
                 default:
-                    if group.hasPrefix("distance_"),
-                       let d = Int(group.dropFirst(9)) {
+                    if scalarHasPrefix(group, "distance_"),
+                       let d = Int(scalarDropFirst(group, 9)) {
                         currentDistance = d
                     }
                 }
@@ -85,7 +99,7 @@ public func decode(_ input: String) throws -> Payload {
         }
 
         // Comment.
-        if trimmed.hasPrefix("# ") { continue }
+        if scalarHasPrefix(trimmed, "# ") { continue }
 
         if inEdges {
             let edge = try parseEdgeLine(trimmed, symbols: symbols, symByID: symByID)
@@ -102,11 +116,14 @@ public func decode(_ input: String) throws -> Payload {
 }
 
 private func parseHeader(_ fields: String, _ p: inout Payload) {
-    for part in fields.split(separator: " ") {
-        let kv = part.split(separator: "=", maxSplits: 1)
-        guard kv.count == 2 else { continue }
-        let key = String(kv[0])
-        let val = String(kv[1])
+    // Split header fields and each key=value on scalars: a tool name, pack_root,
+    // or other value beginning with a grapheme-extending scalar would otherwise
+    // cluster with the space or '=' delimiter (SPEC 2.4).
+    for part in scalarSplitNonEmpty(fields, " ") {
+        guard let eq = scalarFirstIndex(part, "=") else { continue }
+        let pv = part.unicodeScalars
+        let key = String(pv[pv.startIndex..<eq])
+        let val = String(pv[pv.index(after: eq)...])
         switch key {
         case "tool": p.tool = val
         case "budget": p.tokenBudget = Int(val) ?? 0
@@ -119,16 +136,20 @@ private func parseHeader(_ fields: String, _ p: inout Payload) {
 }
 
 private func parseSymbolLine(_ line: String, distance: Int) throws -> (Symbol, Int) {
-    guard line.hasPrefix("@") else {
+    guard scalarHasPrefix(line, "@") else {
         throw DecodeError.invalidSymbolLine(line)
     }
 
-    let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    // Split on the space delimiter over unicode scalars: a qualifiedName or
+    // provenance beginning with a grapheme-extending scalar would otherwise
+    // cluster with the preceding space, collapsing two fields into one
+    // (SPEC 2.4: scalars are code points).
+    let parts = scalarSplitNonEmpty(line, " ")
     guard parts.count >= 5 else {
         throw DecodeError.tooFewSymbolFields(line)
     }
 
-    let idStr = String(parts[0].dropFirst()) // strip @
+    let idStr = scalarDropFirst(parts[0], 1) // strip @
     guard let id = Int(idStr) else {
         throw DecodeError.invalidSymbolLine(line)
     }
@@ -156,19 +177,22 @@ private func parseSymbolLine(_ line: String, distance: Int) throws -> (Symbol, I
 }
 
 private func parseEdgeLine(_ line: String, symbols: [Symbol], symByID: [Int: Int]) throws -> Edge {
-    let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    // Split on scalars so an edge_type or status field adjacent to a
+    // grapheme-extending scalar is not merged with its delimiter (SPEC 2.4).
+    let parts = scalarSplitNonEmpty(line, " ")
     guard parts.count >= 2 else {
         throw DecodeError.invalidEdgeLine(line)
     }
 
     let ref = parts[0]
-    guard let ltIdx = ref.firstIndex(of: "<") else {
+    let rv = ref.unicodeScalars
+    guard let ltIdx = scalarFirstIndex(ref, "<") else {
         throw DecodeError.invalidEdgeLine(line)
     }
 
-    let targetIDStr = String(ref[ref.index(after: ref.startIndex)..<ltIdx]) // strip leading @
-    let afterLt = ref.index(after: ltIdx)
-    let sourceIDStr = String(ref[ref.index(after: afterLt)...]) // strip <@
+    let targetIDStr = String(rv[rv.index(after: rv.startIndex)..<ltIdx]) // strip leading @
+    let afterLt = rv.index(after: ltIdx)
+    let sourceIDStr = String(rv[rv.index(after: afterLt)...]) // strip <@
 
     guard let targetID = Int(targetIDStr),
           let sourceID = Int(sourceIDStr) else {

@@ -277,10 +277,24 @@ private func scalarToAny(_ r: ScalarResult) throws -> Any {
 }
 
 private func parseHeaderFields(_ header: String) -> [String: String] {
+    // Tokenize header fields and split each key=value on unicode scalars: a value
+    // (tool, key, root, ...) beginning with a grapheme-extending scalar would
+    // otherwise cluster with the space or '=' delimiter (SPEC 2.4).
     var m: [String: String] = [:]
-    for tok in header.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
-        if let eq = tok.firstIndex(of: "="), eq != tok.startIndex {
-            m[String(tok[tok.startIndex..<eq])] = String(tok[tok.index(after: eq)...])
+    var tokens: [String] = []
+    var cur: [Unicode.Scalar] = []
+    for c in header.unicodeScalars {
+        if c == " " || c == "\t" {
+            if !cur.isEmpty { tokens.append(String(String.UnicodeScalarView(cur))); cur = [] }
+        } else {
+            cur.append(c)
+        }
+    }
+    if !cur.isEmpty { tokens.append(String(String.UnicodeScalarView(cur))) }
+    for tok in tokens {
+        if let eq = scalarFirstIndex(tok, "="), eq != tok.unicodeScalars.startIndex {
+            let tv = tok.unicodeScalars
+            m[String(tv[tv.startIndex..<eq])] = String(tv[tv.index(after: eq)...])
         }
     }
     return m
@@ -288,7 +302,7 @@ private func parseHeaderFields(_ header: String) -> [String: String] {
 
 private func parseCount(_ s: String) throws -> Int {
     if s == "0" { return 0 }
-    if s.isEmpty || s.first == "0" { throw GenericDeltaError("delta_invalid: invalid count \(s)") }
+    if s.isEmpty || s.unicodeScalars.first == "0" { throw GenericDeltaError("delta_invalid: invalid count \(s)") }
     guard let n = Int(s), String(n) == s else {
         throw GenericDeltaError("delta_invalid: invalid count \(s)")
     }
@@ -299,9 +313,10 @@ private func parseCount(_ s: String) throws -> Int {
 private func findBracketStart(_ s: String) -> String.Index? {
     var inQuote = false
     var escaped = false
-    var idx = s.startIndex
-    while idx < s.endIndex {
-        let c = s[idx]
+    let sv = s.unicodeScalars
+    var idx = sv.startIndex
+    while idx < sv.endIndex {
+        let c = sv[idx]
         if escaped {
             escaped = false
         } else if c == "\\" && inQuote {
@@ -311,7 +326,7 @@ private func findBracketStart(_ s: String) -> String.Index? {
         } else if c == "[" && !inQuote {
             return idx
         }
-        idx = s.index(after: idx)
+        idx = sv.index(after: idx)
     }
     return nil
 }
@@ -319,18 +334,18 @@ private func findBracketStart(_ s: String) -> String.Index? {
 /// Parse a delta/full field declaration `{@id,total,...}`, returning the ordered
 /// fields and the key field (the one that was `@`-marked) (Section 10a.1).
 private func splitDeltaFieldDecl(_ decl: String) throws -> (fields: [String], keyField: String) {
-    guard decl.count >= 2, decl.hasPrefix("{"), decl.hasSuffix("}") else {
+    guard decl.unicodeScalars.count >= 2, scalarHasPrefix(decl, "{"), scalarHasSuffix(decl, "}") else {
         throw GenericDeltaError("delta_invalid: invalid field declaration: \(decl)")
     }
-    let inner = String(decl.dropFirst().dropLast())
+    let inner = String(decl.unicodeScalars.dropFirst().dropLast())
     if inner.isEmpty { return ([], "") }
     var fields: [String] = []
     var keyField = ""
     for raw in splitRespectingQuotes(inner, delimiter: ",") {
         var f = raw.trimmingCharacters(in: .whitespaces)
         var isKey = false
-        if f.hasPrefix("@") { f = String(f.dropFirst()); isKey = true }
-        if f.count >= 2 && f.hasPrefix("\"") && f.hasSuffix("\"") { f = try parseQuotedString(f) }
+        if scalarHasPrefix(f, "@") { f = scalarDropFirst(f, 1); isKey = true }
+        if f.unicodeScalars.count >= 2 && scalarHasPrefix(f, "\"") && scalarHasSuffix(f, "\"") { f = try parseQuotedString(f) }
         if isKey { keyField = f }
         fields.append(f)
     }
@@ -344,17 +359,19 @@ private func parseSectionHeader(_ content: String)
     guard let bi = findBracketStart(content) else {
         throw GenericDeltaError("delta_invalid: section header without count: \(content)")
     }
-    let name = String(content[content.startIndex..<bi]).trimmingCharacters(in: .whitespaces)
-    let rest = String(content[bi...]) // "[N]{...}"
-    guard rest.hasPrefix("[") else {
+    let cv = content.unicodeScalars
+    let name = String(cv[cv.startIndex..<bi]).trimmingCharacters(in: .whitespaces)
+    let rest = String(cv[bi...]) // "[N]{...}"
+    let rv = rest.unicodeScalars
+    guard scalarHasPrefix(rest, "[") else {
         throw GenericDeltaError("delta_invalid: malformed section header: \(content)")
     }
-    guard let close = rest.firstIndex(of: "]") else {
+    guard let close = scalarFirstIndex(rest, "]") else {
         throw GenericDeltaError("delta_invalid: unterminated count: \(content)")
     }
-    let countStr = String(rest[rest.index(after: rest.startIndex)..<close])
+    let countStr = String(rv[rv.index(after: rv.startIndex)..<close])
     let count = try parseCount(countStr)
-    let (fields, keyField) = try splitDeltaFieldDecl(String(rest[rest.index(after: close)...]))
+    let (fields, keyField) = try splitDeltaFieldDecl(String(rv[rv.index(after: close)...]))
     return (name, count, fields, keyField)
 }
 
@@ -374,8 +391,8 @@ private func parseRow(_ line: String, _ fields: [String]) throws -> [String: Any
 /// the declared `pack_root` (Section 10a).
 public func decodeGenericFull(_ text: String) throws -> (set: GenericSet, packRoot: String) {
     var trimmed = text
-    while trimmed.hasSuffix("\n") { trimmed = String(trimmed.dropLast()) }
-    let lines = trimmed.components(separatedBy: "\n")
+    while scalarHasSuffix(trimmed, "\n") { trimmed = String(trimmed.unicodeScalars.dropLast()) }
+    let lines = scalarSplit(trimmed, "\n")
     let hdr = parseHeaderFields(lines[0])
     guard hdr["profile"] == "generic" else {
         throw GenericDeltaError("not a generic payload")
@@ -384,8 +401,8 @@ public func decodeGenericFull(_ text: String) throws -> (set: GenericSet, packRo
     var i = 1
     while i < lines.count {
         let line = lines[i]
-        if !line.hasPrefix("## ") { i += 1; continue }
-        let (name, count, fields, keyField) = try parseSectionHeader(String(line.dropFirst(3)))
+        if !scalarHasPrefix(line, "## ") { i += 1; continue }
+        let (name, count, fields, keyField) = try parseSectionHeader(scalarDropFirst(line, 3))
         set.name = name
         set.fields = fields
         if set.key.isEmpty { set.key = keyField }
@@ -405,8 +422,8 @@ public func decodeGenericFull(_ text: String) throws -> (set: GenericSet, packRo
 /// can be applied with `verifyGenericDelta`.
 public func decodeGenericDelta(_ text: String) throws -> GenericDeltaPayload {
     var trimmed = text
-    while trimmed.hasSuffix("\n") { trimmed = String(trimmed.dropLast()) }
-    let lines = trimmed.components(separatedBy: "\n")
+    while scalarHasSuffix(trimmed, "\n") { trimmed = String(trimmed.unicodeScalars.dropLast()) }
+    let lines = scalarSplit(trimmed, "\n")
     let hdr = parseHeaderFields(lines[0])
     guard hdr["profile"] == "generic" else {
         throw GenericDeltaError("not a generic payload")
@@ -421,8 +438,8 @@ public func decodeGenericDelta(_ text: String) throws -> GenericDeltaPayload {
     var i = 1
     while i < lines.count {
         let line = lines[i]
-        if !line.hasPrefix("## ") { i += 1; continue }
-        let (name, count, fields, keyField) = try parseSectionHeader(String(line.dropFirst(3)))
+        if !scalarHasPrefix(line, "## ") { i += 1; continue }
+        let (name, count, fields, keyField) = try parseSectionHeader(scalarDropFirst(line, 3))
         if d.key.isEmpty && !keyField.isEmpty { d.key = keyField }
         if !fieldsSet && (name == "added" || name == "changed") {
             d.fields = fields
