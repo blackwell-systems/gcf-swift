@@ -77,6 +77,10 @@ final class ConformanceV2Test: XCTestCase {
             if expected.hasPrefix("GCF profile=graph") {
                 let got = encode(toPayload(fx["input"]))
                 XCTAssertEqual(got, expected, rel)
+                // Re-encode idempotence: encode(decode(got)) == got. Confirms the graph
+                // decoder reconstructs the payload without dropping or reordering fields.
+                let decodedG = try decode(got)
+                XCTAssertEqual(encode(decodedG), got, "graph re-encode idempotence \(rel)")
             } else {
                 let input = fx["input"] ?? NSNull()
                 let got = encodeGeneric(input)
@@ -120,7 +124,13 @@ final class ConformanceV2Test: XCTestCase {
         case "generic-pack-root":
             XCTAssertEqual(genericPackRoot(toSet(fx["input"])), fx["expected"] as? String ?? "", rel)
         case "generic-delta":
-            XCTAssertEqual(encodeGenericDelta(toDelta(fx["input"])), fx["expected"] as? String ?? "", rel)
+            let gotDelta = encodeGenericDelta(toDelta(fx["input"]))
+            XCTAssertEqual(gotDelta, fx["expected"] as? String ?? "", rel)
+            // Re-encode idempotence: encode(decode(got)) == got, ignoring the derived
+            // savings= header stat (computed from original set sizes at encode time and
+            // not carried in the wire). Confirms the delta decoder preserves fields/order.
+            XCTAssertEqual(stripDeltaSavings(encodeGenericDelta(try decodeGenericDelta(gotDelta))),
+                           stripDeltaSavings(gotDelta), "delta re-encode idempotence \(rel)")
         case "generic-delta-verify", "generic-delta-decode":
             let inp = fx["input"] as? OrderedDictionary
             let base = toSet(inp?["base"])
@@ -345,6 +355,15 @@ final class ConformanceV2Test: XCTestCase {
                           key: od?["key"] as? String ?? "",
                           fields: toFields(od?["fields"]),
                           rows: toRows(od?["rows"]))
+    }
+
+    // Remove the derived ` savings=...` header stat so re-encode idempotence can be
+    // checked on the parts of the wire the payload actually carries.
+    private func stripDeltaSavings(_ s: String) -> String {
+        guard let range = s.range(of: " savings=") else { return s }
+        var end = range.upperBound
+        while end < s.endIndex, s[end] != " ", s[end] != "\n" { end = s.index(after: end) }
+        return String(s[s.startIndex..<range.lowerBound]) + String(s[end...])
     }
 
     private func toDelta(_ v: Any?) -> GenericDeltaPayload {
