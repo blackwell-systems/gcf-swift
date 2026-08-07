@@ -52,6 +52,35 @@ public class GenericStreamEncoder {
         current = (name: name, fields: fields, count: 0)
     }
 
+    /// Start a keyed-map section with deferred count [?:] (SPEC 7.2a).
+    ///
+    /// `keyLabel` is the key column; `valueFields` are the value-object fields. Each
+    /// writeRow value slice is [keyValue, ...valueFields]. The section name and every
+    /// field name are quoted per Section 2.4 (via formatKey). A value field name
+    /// containing ">" is a flattened path a streaming row cannot represent
+    /// (Section 8.3, 7.4.6); it is rejected and surfaced at close().
+    public func beginKeyedMap(_ name: String, keyLabel: String, valueFields: [String]) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if pendingError != nil {
+            return
+        }
+        if current != nil {
+            endArrayLocked()
+        }
+        for f in valueFields {
+            if f.contains(">") {
+                pendingError = .invalidFieldDeclaration(
+                    "streaming field name '\(f)' contains '>' (a flattened path is not representable in a streaming row)")
+                return
+            }
+        }
+        let fields = [keyLabel] + valueFields
+        writer.write("## \(formatKey(name)) [?:]{\(formatFieldDecl(fields))}\n")
+        current = (name: name, fields: fields, count: 0)
+    }
+
     /// Emit a single pipe-separated row immediately.
     public func writeRow(_ values: [Any?]) {
         lock.lock()

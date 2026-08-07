@@ -31,7 +31,7 @@ public func decodeGeneric(_ input: String) throws -> Any {
         let trimmedLine = l.trimmingCharacters(in: .whitespaces)
         if trimmedLine.hasPrefix("# ") { continue }
         if trimmedLine.hasPrefix("##! ") { summaryLine = trimmedLine; continue }
-        if trimmedLine.hasPrefix("## ") && trimmedLine.contains("[?]") { deferredCount += 1 }
+        if trimmedLine.hasPrefix("## ") && (trimmedLine.contains("[?]") || trimmedLine.contains("[?:]")) { deferredCount += 1 }
         contentLines.append(l)
     }
 
@@ -212,9 +212,27 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
     let bp = bracketPart.trimmingCharacters(in: CharacterSet(charactersIn: " "))
     guard bp.hasPrefix("[") else { throw GCFError.invalidCount(bp) }
     guard let closeIdx = bp.firstIndex(of: "]") else { throw GCFError.invalidCount(bp) }
-    let countStr = String(bp[bp.index(after: bp.startIndex)..<closeIdx])
+    var countStr = String(bp[bp.index(after: bp.startIndex)..<closeIdx])
     let after = String(bp[bp.index(after: closeIdx)...])
+
+    // Keyed map marker: `[N:]` (the `:` after the count reconstructs a JSON object,
+    // not an array; SPEC 7.2a.2). A keyed header MUST be followed by a field
+    // declaration.
+    let keyed = countStr.hasSuffix(":")
+    if keyed {
+        countStr = String(countStr.dropLast())
+        guard after.hasPrefix("{") else {
+            throw GCFError.invalidFieldDeclaration("keyed_map: missing field declaration")
+        }
+    }
+
     let count: Int = countStr == "?" ? -1 : try parseCountValue(countStr)
+
+    // A keyed map has at least one member; an empty object is encoded per
+    // Section 7.7, never as [0:] (SPEC 7.2a.4).
+    if keyed && count == 0 {
+        throw GCFError.invalidCount("keyed_map: zero count [0:] is invalid (an empty object uses Section 7.7)")
+    }
 
     if count == 0 && !after.hasPrefix("{") && !after.hasPrefix(":") {
         return ([] as [Any], 1)
@@ -239,8 +257,17 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
         let braceIdx = after.unicodeScalars.index(after.unicodeScalars.startIndex, offsetBy: braceEnd)
         let declStr = String(after[after.startIndex...braceIdx])
         let fields = try splitFieldDecl(declStr)
+        // A keyed header MUST declare at least two fields: the key column plus at
+        // least one value field (SPEC 7.2a.2).
+        if keyed && fields.count < 2 {
+            throw GCFError.invalidFieldDeclaration("keyed_map: header must declare at least two fields")
+        }
         let (rows, consumed) = try parseTabularBody(lines, start: headerLine + 1, depth: depth, fields: fields, expectedCount: count)
         if count >= 0 && rows.count != count { throw GCFError.countMismatch(count, rows.count) }
+        if keyed {
+            let m = try keyedRowsToMap(rows, fields: fields)
+            return (m, consumed + 1)
+        }
         return (rows, consumed + 1)
     }
 
@@ -756,7 +783,7 @@ private func validateSummaryCounts(_ summaryLine: String, deferredCount: Int, co
     var currentCount = 0
     for line in contentLines {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("## ") && trimmed.contains("[?]") {
+        if trimmed.hasPrefix("## ") && (trimmed.contains("[?]") || trimmed.contains("[?:]")) {
             if inDeferred { actualCounts.append(currentCount) }
             inDeferred = true; currentCount = 0; continue
         }

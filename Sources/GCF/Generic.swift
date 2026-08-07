@@ -27,8 +27,12 @@ private func encodeRootValue(_ v: Any?, out: inout String, opts: GenericOptions)
         out += "=-\n"
         return
     }
-    if let dict = asOrderedDict(v) {
-        encodeObject(dict, out: &out, depth: 0, opts: opts)
+    if asOrderedDict(v) != nil {
+        if let plan = keyedMapEligible(v) {
+            encodeKeyedMap(plan, name: "", named: false, out: &out, depth: 0, opts: opts)
+            return
+        }
+        encodeObject(asOrderedDict(v)!, out: &out, depth: 0, opts: opts)
     } else if let arr = v as? [Any] {
         encodeRootArray(arr, out: &out, opts: opts)
     } else if v is NSNull {
@@ -66,6 +70,10 @@ private func encodeObject(_ pairs: [(String, Any)], out: inout String, depth: In
     for (key, value) in pairs {
         let fk = formatKey(key)
         if let nested = asOrderedDict(value) {
+            if let plan = keyedMapEligible(value) {
+                encodeKeyedMap(plan, name: key, named: true, out: &out, depth: depth, opts: opts)
+                continue
+            }
             out += "\(prefix)## \(fk)\n"
             encodeObject(nested, out: &out, depth: depth + 1, opts: opts)
         } else if let arr = value as? [Any] {
@@ -294,7 +302,7 @@ private func resolveKeyChain(_ item: Any, keys: [String]) -> (Any?, Bool) {
     return (current, true)
 }
 
-private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int, opts: GenericOptions) {
+func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int, opts: GenericOptions, keyed: Bool = false) {
     let prefix = indentStr(depth)
 
     // Phase 0: Analyze fields for flattening.
@@ -341,7 +349,8 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
     }
 
     let headerFields = columns.map { $0.header }
-    out += "\(headerPrefix)[\(arr.count)]{\(headerFields.joined(separator: ","))}\n"
+    let bracket = keyed ? ":]" : "]"
+    out += "\(headerPrefix)[\(arr.count)\(bracket){\(headerFields.joined(separator: ","))}\n"
 
     for (i, item) in arr.enumerated() {
         guard let pairs = asOrderedDict(item) else { continue }
@@ -414,8 +423,12 @@ private func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String],
                 }
                 out += "\(prefix)\(vals.joined(separator: "|"))\n"
             } else if let nested = asOrderedDict(att.value) {
-                out += "\(prefix).\(fk) {}\n"
-                encodeObject(nested, out: &out, depth: depth + 2, opts: opts)
+                if let plan = keyedMapEligible(att.value) {
+                    encodeKeyedMapWithPrefix(plan, headerPrefix: "\(prefix).\(fk) ", out: &out, depth: depth + 2, opts: opts)
+                } else {
+                    out += "\(prefix).\(fk) {}\n"
+                    encodeObject(nested, out: &out, depth: depth + 2, opts: opts)
+                }
             } else if let subArr = att.value as? [Any] {
                 if let sas = sharedArrSchemas[att.name], i > 0 {
                     encodeAttachmentArrayShared(prefix, fk: fk, arr: subArr, out: &out, depth: depth + 2, sharedFields: sas, opts: opts)
@@ -477,6 +490,10 @@ private func encodeExpanded(_ headerPrefix: String, arr: [Any], out: inout Strin
     out += "\(headerPrefix)[\(arr.count)]\n"
     for (i, item) in arr.enumerated() {
         if let nested = asOrderedDict(item) {
+            if let plan = keyedMapEligible(item) {
+                encodeKeyedMapWithPrefix(plan, headerPrefix: "\(prefix)@\(i) ", out: &out, depth: depth + 1, opts: opts)
+                continue
+            }
             out += "\(prefix)@\(i) {}\n"
             encodeObject(nested, out: &out, depth: depth + 1, opts: opts)
         } else if let subArr = item as? [Any] {
