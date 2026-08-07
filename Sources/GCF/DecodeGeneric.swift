@@ -108,11 +108,14 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
         // Array section.
         if content.hasPrefix("## ") {
             let hdr = String(content.dropFirst(3))
-            if let bi = hdr.range(of: " [") {
-                let name = try parseKeyFromHeader(String(hdr[hdr.startIndex..<bi.lowerBound]))
+            // Locate the named-array count bracket outside any quoted name, so a
+            // quoted section/key name containing " [" (e.g. `## "a [1] b"`) is not
+            // misread as a named-array header (mirrors findClosingBrace).
+            if let bi = findHeaderBracketStart(hdr) {
+                let name = try parseKeyFromHeader(String(hdr[hdr.startIndex..<bi]))
                 try checkDup(out, key: name)
                 let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: i, depth: depth,
-                                                                bracketPart: String(hdr[bi.lowerBound...]))
+                                                                bracketPart: String(hdr[bi...]))
                 out[name] = arr
                 i += consumed
                 continue
@@ -365,6 +368,27 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, dept
         return (name, try scalarToAny(parsed), 1, nil)
     }
     throw GCFError.invalidFieldDeclaration("invalid attachment form: \(afterName)")
+}
+
+/// Returns the String.Index of the space before the named-array count bracket
+/// (" [") that lies OUTSIDE any quoted name, tracking quote state and escapes.
+/// Returns nil when no such bracket exists (mirrors findClosingBrace).
+private func findHeaderBracketStart(_ s: String) -> String.Index? {
+    var inQuote = false
+    var escaped = false
+    var i = s.startIndex
+    while i < s.endIndex {
+        let c = s[i]
+        if escaped { escaped = false; i = s.index(after: i); continue }
+        if c == "\\" && inQuote { escaped = true; i = s.index(after: i); continue }
+        if c == "\"" { inQuote = !inQuote; i = s.index(after: i); continue }
+        if !inQuote && c == " " {
+            let next = s.index(after: i)
+            if next < s.endIndex && s[next] == "[" { return i }
+        }
+        i = s.index(after: i)
+    }
+    return nil
 }
 
 private func findClosingBraceSwift(_ s: String) -> Int? {
