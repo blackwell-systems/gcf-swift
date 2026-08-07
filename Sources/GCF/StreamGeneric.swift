@@ -131,33 +131,27 @@ private func formatFieldDecl(_ fields: [String]) -> String {
     return fields.map { formatKey($0) }.joined(separator: ",")
 }
 
+/// Formats a streaming cell value using the canonical scalar formatter so
+/// string quoting matches the buffered tabular encoder (Section 2.4). The
+/// previous bespoke version only quoted empty strings and strings containing
+/// "|" or newline, so a string that collided with a non-string token (for
+/// example "true", "123", "-", or a leading "@") was emitted bare and decoded
+/// back as the wrong type, breaking round-trip. Delegating to formatScalar in
+/// the "|" cell context quotes those value-collision strings while leaving
+/// plain strings and real numbers/bools/null bare. Int64 is normalized to Int
+/// where representable so formatScalar's Int path handles it.
+/// Formats a streaming cell value using the canonical scalar formatter so
+/// string quoting matches the buffered tabular encoder (Section 2.4). The
+/// previous bespoke version only quoted empty strings and strings containing
+/// "|" or newline, so a string that collided with a non-string token (for
+/// example "true", "123", "-", or a leading "@") was emitted bare and decoded
+/// back as the wrong type, breaking round-trip. Delegating to formatScalar in
+/// the "|" cell context quotes those value-collision strings while leaving
+/// plain strings and real numbers/bools/null bare. Int64 is normalized to Int
+/// where representable so formatScalar's Int path handles it.
 private func formatValue(_ v: Any?) -> String {
-    guard let v = v else { return "-" }
-
-    if let b = v as? Bool {
-        return b ? "true" : "false"
+    if let n = v as? Int64, let i = Int(exactly: n) {
+        return formatScalar(i, delimiter: "|")
     }
-    if let n = v as? Int {
-        return "\(n)"
-    }
-    if let n = v as? Int64 {
-        return "\(n)"
-    }
-    if let n = v as? Double {
-        // Remove trailing zeros for clean output
-        if n == n.rounded() && !n.isInfinite {
-            return "\(Int64(n))"
-        }
-        return "\(n)"
-    }
-    if let s = v as? String {
-        if s.isEmpty {
-            return "\"\""
-        }
-        if s.contains("|") || s.contains("\n") {
-            return "\"\(s.replacingOccurrences(of: "\"", with: "\\\""))\""
-        }
-        return s
-    }
-    return "\(v)"
+    return formatScalar(v, delimiter: "|")
 }
