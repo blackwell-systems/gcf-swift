@@ -1,5 +1,96 @@
 import Foundation
 
+// MARK: - Scalar-based delimiter helpers
+//
+// GCF structural delimiters are code points (SPEC 2.4). Swift's String iterates
+// by grapheme cluster (Character), so a delimiter byte adjacent to a
+// grapheme-extending scalar in the data (for example U+0619, U+102D, U+0ECB)
+// merges with it into one Character. Character-based detection (hasPrefix,
+// firstIndex(of:), dropFirst, index(after:)) then misreads structure. All
+// structural detection in the decoder operates on unicode scalars instead.
+
+/// Returns true if the scalar view of `s` begins with the scalars of `prefix`.
+private func scalarHasPrefix(_ s: String, _ prefix: String) -> Bool {
+    var si = s.unicodeScalars.startIndex
+    let se = s.unicodeScalars.endIndex
+    for p in prefix.unicodeScalars {
+        if si == se || s.unicodeScalars[si] != p { return false }
+        si = s.unicodeScalars.index(after: si)
+    }
+    return true
+}
+
+/// Returns true if the scalar view of `s` ends with the scalars of `suffix`.
+private func scalarHasSuffix(_ s: String, _ suffix: String) -> Bool {
+    let sv = s.unicodeScalars
+    let fv = suffix.unicodeScalars
+    var si = sv.endIndex
+    var fi = fv.endIndex
+    while fi != fv.startIndex {
+        if si == sv.startIndex { return false }
+        si = sv.index(before: si)
+        fi = fv.index(before: fi)
+        if sv[si] != fv[fi] { return false }
+    }
+    return true
+}
+
+/// Drops the first `n` scalars from `s` and returns the remainder as a String.
+private func scalarDropFirst(_ s: String, _ n: Int) -> String {
+    let sv = s.unicodeScalars
+    let idx = sv.index(sv.startIndex, offsetBy: n, limitedBy: sv.endIndex) ?? sv.endIndex
+    return String(sv[idx...])
+}
+
+/// Returns the scalar-view index of the first occurrence of `scalar`, or nil.
+private func scalarFirstIndex(_ s: String, _ scalar: Unicode.Scalar) -> String.UnicodeScalarView.Index? {
+    var i = s.unicodeScalars.startIndex
+    let e = s.unicodeScalars.endIndex
+    while i < e {
+        if s.unicodeScalars[i] == scalar { return i }
+        i = s.unicodeScalars.index(after: i)
+    }
+    return nil
+}
+
+/// The first unicode scalar of `s`, or nil when empty.
+private func firstScalar(_ s: String) -> Unicode.Scalar? {
+    return s.unicodeScalars.first
+}
+
+/// Splits `s` on every occurrence of a single scalar, keeping empty segments
+/// (equivalent to split with omittingEmptySubsequences: false).
+private func scalarSplit(_ s: String, _ sep: Unicode.Scalar) -> [String] {
+    var parts: [String] = []
+    var current: [Unicode.Scalar] = []
+    for c in s.unicodeScalars {
+        if c == sep {
+            parts.append(String(String.UnicodeScalarView(current)))
+            current = []
+        } else {
+            current.append(c)
+        }
+    }
+    parts.append(String(String.UnicodeScalarView(current)))
+    return parts
+}
+
+/// Returns true if the scalar view of `s` contains the scalars of `needle`.
+private func scalarContains(_ s: String, _ needle: String) -> Bool {
+    let sv = Array(s.unicodeScalars)
+    let nv = Array(needle.unicodeScalars)
+    if nv.isEmpty { return true }
+    if sv.count < nv.count { return false }
+    for start in 0...(sv.count - nv.count) {
+        var match = true
+        for k in 0..<nv.count {
+            if sv[start + k] != nv[k] { match = false; break }
+        }
+        if match { return true }
+    }
+    return false
+}
+
 /// Decode GCF generic or graph profile text into a value tree.
 public func decodeGeneric(_ input: String) throws -> Any {
     let trimmed = input.trimmingCharacters(in: CharacterSet(charactersIn: "\n\r"))
@@ -24,14 +115,14 @@ public func decodeGeneric(_ input: String) throws -> Any {
     for line in lines.dropFirst() {
         let l = line.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
         if l.isEmpty { continue }
-        for c in l {
+        for c in l.unicodeScalars {
             if c == "\t" { throw GCFError.tabIndentation }
             if c != " " { break }
         }
         let trimmedLine = l.trimmingCharacters(in: .whitespaces)
-        if trimmedLine.hasPrefix("# ") { continue }
-        if trimmedLine.hasPrefix("##! ") { summaryLine = trimmedLine; continue }
-        if trimmedLine.hasPrefix("## ") && (trimmedLine.contains("[?]") || trimmedLine.contains("[?:]")) { deferredCount += 1 }
+        if scalarHasPrefix(trimmedLine, "# ") { continue }
+        if scalarHasPrefix(trimmedLine, "##! ") { summaryLine = trimmedLine; continue }
+        if scalarHasPrefix(trimmedLine, "## ") && (scalarContains(trimmedLine, "[?]") || scalarContains(trimmedLine, "[?:]")) { deferredCount += 1 }
         contentLines.append(l)
     }
 
@@ -43,17 +134,18 @@ public func decodeGeneric(_ input: String) throws -> Any {
 
     let first = contentLines[0].trimmingCharacters(in: CharacterSet(charactersIn: " "))
 
-    // Root scalar.
-    if first.hasPrefix("=") {
+    // Root scalar. Detect '=' on unicode scalars (a value beginning with a
+    // grapheme-extending scalar would cluster with the leading '=' Character).
+    if first.unicodeScalars.first == "=" {
         if contentLines.count > 1 { throw GCFError.trailingCharacters }
         let afterEq = first.unicodeScalars.index(after: first.unicodeScalars.startIndex)
-        return try scalarToAny(parseScalar(String(first[afterEq...])))
+        return try scalarToAny(parseScalar(String(first.unicodeScalars[afterEq...])))
     }
 
     // Root array.
-    if first.hasPrefix("## [") {
+    if scalarHasPrefix(first, "## [") {
         let (arr, _) = try parseArrayFromHeader(contentLines, headerLine: 0, depth: 0,
-                                                  bracketPart: String(first.dropFirst(3)))
+                                                  bracketPart: scalarDropFirst(first, 3))
         return arr
     }
 
@@ -99,15 +191,15 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
     var i = start
     while i < lines.count {
         let line = lines[i]
-        if depth > 0 && !line.hasPrefix(ind) { break }
-        let content = depth > 0 ? String(line.dropFirst(ind.count)) : line
-        if !content.isEmpty && content.first == " " {
+        if depth > 0 && !scalarHasPrefix(line, ind) { break }
+        let content = depth > 0 ? scalarDropFirst(line, ind.unicodeScalars.count) : line
+        if !content.isEmpty && firstScalar(content) == " " {
             throw GCFError.invalidIndent
         }
 
         // Array section.
-        if content.hasPrefix("## ") {
-            let hdr = String(content.dropFirst(3))
+        if scalarHasPrefix(content, "## ") {
+            let hdr = scalarDropFirst(content, 3)
             // Locate the named-array count bracket outside any quoted name, so a
             // quoted section/key name containing " [" (e.g. `## "a [1] b"`) is not
             // misread as a named-array header (mirrors findClosingBrace).
@@ -143,13 +235,13 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
         }
 
         // Inline array (e.g. items[3]: a,b,c). Only reached if no = found.
-        if !content.hasPrefix("@") && !content.hasPrefix("##") {
-            if let bracketIdx = content.firstIndex(of: "["), bracketIdx > content.startIndex {
-                let rest = String(content[bracketIdx...])
-                if let closeIdx = rest.firstIndex(of: "]") {
-                    let after = String(rest[rest.index(after: closeIdx)...])
-                    if after.hasPrefix(": ") || after == ":" {
-                        let name = try parseKeyFromHeader(String(content[content.startIndex..<bracketIdx]))
+        if !scalarHasPrefix(content, "@") && !scalarHasPrefix(content, "##") {
+            if let bracketIdx = scalarFirstIndex(content, "["), bracketIdx > content.unicodeScalars.startIndex {
+                let rest = String(content.unicodeScalars[bracketIdx...])
+                if let closeIdx = scalarFirstIndex(rest, "]") {
+                    let after = String(rest.unicodeScalars[rest.unicodeScalars.index(after: closeIdx)...])
+                    if scalarHasPrefix(after, ": ") || after == ":" {
+                        let name = try parseKeyFromHeader(String(content.unicodeScalars[content.unicodeScalars.startIndex..<bracketIdx]))
                         try checkDup(out, key: name)
                         let (arr, _) = try parseArrayFromHeader(lines, headerLine: i, depth: depth, bracketPart: rest)
                         out[name] = arr
@@ -165,7 +257,7 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
         // (that dropped data — a lossless round-trip hole). A pipe-delimited line is
         // a stray positional inline body with no eligible `^` cell (SPEC 16.5,
         // orphan_inline_attachment); any other unrecognized line is likewise rejected.
-        if content.contains("|") {
+        if content.unicodeScalars.contains("|") {
             throw GCFError.orphanInlineAttachment(content)
         }
         throw GCFError.invalidLine(content)
@@ -213,18 +305,19 @@ private func checkDup(_ dict: OrderedDictionary, key: String) throws {
 private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int,
                                    bracketPart: String) throws -> (Any, Int) {
     let bp = bracketPart.trimmingCharacters(in: CharacterSet(charactersIn: " "))
-    guard bp.hasPrefix("[") else { throw GCFError.invalidCount(bp) }
-    guard let closeIdx = bp.firstIndex(of: "]") else { throw GCFError.invalidCount(bp) }
-    var countStr = String(bp[bp.index(after: bp.startIndex)..<closeIdx])
-    let after = String(bp[bp.index(after: closeIdx)...])
+    guard scalarHasPrefix(bp, "[") else { throw GCFError.invalidCount(bp) }
+    let bpv = bp.unicodeScalars
+    guard let closeIdx = scalarFirstIndex(bp, "]") else { throw GCFError.invalidCount(bp) }
+    var countStr = String(bpv[bpv.index(after: bpv.startIndex)..<closeIdx])
+    let after = String(bpv[bpv.index(after: closeIdx)...])
 
     // Keyed map marker: `[N:]` (the `:` after the count reconstructs a JSON object,
     // not an array; SPEC 7.2a.2). A keyed header MUST be followed by a field
     // declaration.
-    let keyed = countStr.hasSuffix(":")
+    let keyed = scalarHasSuffix(countStr, ":")
     if keyed {
-        countStr = String(countStr.dropLast())
-        guard after.hasPrefix("{") else {
+        countStr = String(countStr.unicodeScalars.dropLast())
+        guard scalarHasPrefix(after, "{") else {
             throw GCFError.invalidFieldDeclaration("keyed_map: missing field declaration")
         }
     }
@@ -237,13 +330,13 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
         throw GCFError.invalidCount("keyed_map: zero count [0:] is invalid (an empty object uses Section 7.7)")
     }
 
-    if count == 0 && !after.hasPrefix("{") && !after.hasPrefix(":") {
+    if count == 0 && !scalarHasPrefix(after, "{") && !scalarHasPrefix(after, ":") {
         return ([] as [Any], 1)
     }
 
     // Inline.
-    if after.hasPrefix(": ") || after == ":" {
-        let valsStr = after.hasPrefix(": ") ? String(after.dropFirst(2)) : ""
+    if scalarHasPrefix(after, ": ") || after == ":" {
+        let valsStr = scalarHasPrefix(after, ": ") ? scalarDropFirst(after, 2) : ""
         if valsStr.isEmpty {
             if count >= 0 && count != 0 { throw GCFError.countMismatch(count, 0) }
             return ([] as [Any], 1)
@@ -255,10 +348,10 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
     }
 
     // Tabular.
-    if after.hasPrefix("{") {
+    if scalarHasPrefix(after, "{") {
         guard let braceEnd = findClosingBrace(after) else { throw GCFError.invalidFieldDeclaration(after) }
         let braceIdx = after.unicodeScalars.index(after.unicodeScalars.startIndex, offsetBy: braceEnd)
-        let declStr = String(after[after.startIndex...braceIdx])
+        let declStr = String(after.unicodeScalars[after.unicodeScalars.startIndex...braceIdx])
         let fields = try splitFieldDecl(declStr)
         // A keyed header MUST declare at least two fields: the key column plus at
         // least one value field (SPEC 7.2a.2).
@@ -301,8 +394,9 @@ private func parseAttachmentName(_ rest: String) -> (String, String) {
         }
         return ("", rest)
     }
-    if let sp = rest.firstIndex(of: " ") {
-        return (String(rest[rest.startIndex..<sp]), String(rest[sp...]))
+    if let sp = scalarFirstIndex(rest, " ") {
+        let rv = rest.unicodeScalars
+        return (String(rv[rv.startIndex..<sp]), String(rv[sp...]))
     }
     return (rest, "")
 }
@@ -310,36 +404,38 @@ private func parseAttachmentName(_ rest: String) -> (String, String) {
 private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, depth: Int,
                                sharedSchemas: inout [String: [String]]) throws -> (String, Any, Int, [String]?) {
     let (name, afterNameRaw) = parseAttachmentName(rest)
-    if name.isEmpty && !rest.hasPrefix("\"\"") { throw GCFError.invalidFieldDeclaration("invalid attachment: \(rest)") }
+    if name.isEmpty && !scalarHasPrefix(rest, "\"\"") { throw GCFError.invalidFieldDeclaration("invalid attachment: \(rest)") }
     let afterName = afterNameRaw.trimmingCharacters(in: CharacterSet(charactersIn: " "))
 
-    if afterName.hasPrefix("{}") {
+    if scalarHasPrefix(afterName, "{}") {
         var nested = OrderedDictionary()
         let consumed = try parseObjectBody(lines, start: lineIdx + 1, depth: depth, out: &nested)
         return (name, nested, consumed + 1, nil)
     }
-    if afterName.hasPrefix("[") {
-        guard let cb = afterName.firstIndex(of: "]") else { throw GCFError.invalidFieldDeclaration("missing ]") }
-        let afterClose = String(afterName[afterName.index(after: cb)...])
+    if scalarHasPrefix(afterName, "[") {
+        let anv = afterName.unicodeScalars
+        guard let cb = scalarFirstIndex(afterName, "]") else { throw GCFError.invalidFieldDeclaration("missing ]") }
+        let afterClose = String(anv[anv.index(after: cb)...])
 
-        if afterClose.hasPrefix("{") {
+        if scalarHasPrefix(afterClose, "{") {
             var parsedFields: [String]? = nil
             if let eb = findClosingBraceSwift(afterClose) {
-                parsedFields = try? splitFieldDecl(String(afterClose[afterClose.startIndex...afterClose.index(afterClose.startIndex, offsetBy: eb)]))
+                let acv = afterClose.unicodeScalars
+                parsedFields = try? splitFieldDecl(String(acv[acv.startIndex...acv.index(acv.startIndex, offsetBy: eb)]))
             }
             let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
             return (name, arr, consumed, parsedFields)
         }
 
         // Inline primitive array.
-        if afterClose.hasPrefix(": ") || afterClose == ":" {
+        if scalarHasPrefix(afterClose, ": ") || afterClose == ":" {
             let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
             return (name, arr, consumed, nil)
         }
 
         // Shared schema.
         if let sf = sharedSchemas[name] {
-            let countStr = String(afterName[afterName.index(after: afterName.startIndex)..<cb])
+            let countStr = String(anv[anv.index(after: anv.startIndex)..<cb])
             let count = countStr == "?" ? -1 : (Int(countStr) ?? -1)
             if count == 0 { return (name, [Any](), 1, nil) }
             var useShared = true
@@ -347,8 +443,8 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, dept
             let nextIdx = lineIdx + 1
             if nextIdx < lines.count {
                 var nc = lines[nextIdx]
-                if depth > 0 && nc.hasPrefix(ind) { nc = String(nc.dropFirst(ind.count)) }
-                if nc.trimmingCharacters(in: CharacterSet(charactersIn: " ")).hasPrefix("@") { useShared = false }
+                if depth > 0 && scalarHasPrefix(nc, ind) { nc = scalarDropFirst(nc, ind.unicodeScalars.count) }
+                if scalarHasPrefix(nc.trimmingCharacters(in: CharacterSet(charactersIn: " ")), "@") { useShared = false }
             }
             if useShared {
                 let (rows, consumed) = try parseTabularBody(lines, start: lineIdx + 1, depth: depth, fields: sf, expectedCount: count)
@@ -361,8 +457,12 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, dept
         return (name, arr, consumed, nil)
     }
     // Scalar: =value (field names containing ">" excluded from tabular columns).
-    if afterName.hasPrefix("=") {
-        let valStr = String(afterName.dropFirst())
+    if afterName.unicodeScalars.first == "=" {
+        // Detect the '=' delimiter on unicode scalars, not Characters: a value that
+        // begins with a grapheme-extending scalar (for example U+0BD7) would cluster
+        // with the leading '=' into a single Character, so hasPrefix("=") and
+        // dropFirst() would misread the value (SPEC 2.4 scalars are code points).
+        let valStr = String(afterName.unicodeScalars.dropFirst())
         let parsed = try parseScalar(valStr, tabularContext: true)
         if case .missing = parsed { return (name, NSNull(), 1, nil) }
         return (name, try scalarToAny(parsed), 1, nil)
@@ -376,24 +476,26 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String, dept
 private func findHeaderBracketStart(_ s: String) -> String.Index? {
     var inQuote = false
     var escaped = false
-    var i = s.startIndex
-    while i < s.endIndex {
-        let c = s[i]
-        if escaped { escaped = false; i = s.index(after: i); continue }
-        if c == "\\" && inQuote { escaped = true; i = s.index(after: i); continue }
-        if c == "\"" { inQuote = !inQuote; i = s.index(after: i); continue }
+    let sv = s.unicodeScalars
+    var i = sv.startIndex
+    while i < sv.endIndex {
+        let c = sv[i]
+        if escaped { escaped = false; i = sv.index(after: i); continue }
+        if c == "\\" && inQuote { escaped = true; i = sv.index(after: i); continue }
+        if c == "\"" { inQuote = !inQuote; i = sv.index(after: i); continue }
         if !inQuote && c == " " {
-            let next = s.index(after: i)
-            if next < s.endIndex && s[next] == "[" { return i }
+            let next = sv.index(after: i)
+            if next < sv.endIndex && sv[next] == "[" { return i }
         }
-        i = s.index(after: i)
+        i = sv.index(after: i)
     }
     return nil
 }
 
+/// Returns the unicode scalar offset of the closing `}`.
 private func findClosingBraceSwift(_ s: String) -> Int? {
     var inQuote = false; var escaped = false; var idx = 0
-    for c in s {
+    for c in s.unicodeScalars {
         if escaped { escaped = false; idx += 1; continue }
         if c == "\\" && inQuote { escaped = true; idx += 1; continue }
         if c == "\"" { inQuote = !inQuote; idx += 1; continue }
@@ -414,8 +516,8 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
     // Detect path columns: fields containing ">".
     var pathColumnMap: [String: [String]] = [:]
     for f in fields {
-        if f.contains(">") {
-            let parts = f.split(separator: ">", omittingEmptySubsequences: false).map(String.init)
+        if f.unicodeScalars.contains(">") {
+            let parts = scalarSplit(f, ">")
             // Only treat as a path column if all segments are non-empty.
             if parts.allSatisfy({ !$0.isEmpty }) {
                 pathColumnMap[f] = parts
@@ -427,25 +529,26 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
         let line = lines[i]
         let content: String
         if depth > 0 {
-            guard line.hasPrefix(ind) else { break }
-            content = String(line.dropFirst(ind.count))
+            guard scalarHasPrefix(line, ind) else { break }
+            content = scalarDropFirst(line, ind.unicodeScalars.count)
         } else {
             content = line
         }
-        if content.hasPrefix("## ") || content.hasPrefix("##!") { break }
-        if !content.isEmpty && content.first == " " {
+        if scalarHasPrefix(content, "## ") || scalarHasPrefix(content, "##!") { break }
+        if !content.isEmpty && firstScalar(content) == " " {
             let trimmed = content.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix(".") { break }
+            if scalarHasPrefix(trimmed, ".") { break }
             break
         }
 
         var rowData = content
         var rowHasID = false
-        if rowData.hasPrefix("@") {
-            if let sp = rowData.firstIndex(of: " ") {
-                let idStr = String(rowData[rowData.index(after: rowData.startIndex)..<sp])
-                if !idStr.isEmpty && idStr.allSatisfy({ $0.isASCII && $0.isNumber }) {
-                    rowData = String(rowData[rowData.index(after: sp)...])
+        if scalarHasPrefix(rowData, "@") {
+            let rv = rowData.unicodeScalars
+            if let sp = scalarFirstIndex(rowData, " ") {
+                let idStr = String(rv[rv.index(after: rv.startIndex)..<sp])
+                if !idStr.isEmpty && idStr.unicodeScalars.allSatisfy({ $0.isASCII && ($0.value >= 0x30 && $0.value <= 0x39) }) {
+                    rowData = String(rv[rv.index(after: sp)...])
                     rowHasID = true
                 }
             }
@@ -477,8 +580,8 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                 continue
             }
 
-            if cellVal.hasPrefix("^{") && cellVal.hasSuffix("}") {
-                let schemaStr = String(cellVal.dropFirst(1))
+            if scalarHasPrefix(cellVal, "^{") && scalarHasSuffix(cellVal, "}") {
+                let schemaStr = scalarDropFirst(cellVal, 1)
                 let ifs = try splitFieldDecl(schemaStr)
                 inlineSchemas[f] = ifs
                 inlineAttFields.append(f)
@@ -511,26 +614,26 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             while i < lines.count {
                 let aLine = lines[i]
                 let aContent: String?
-                if depth == 0 || aLine.hasPrefix(ind) {
-                    aContent = depth > 0 ? String(aLine.dropFirst(ind.count)) : aLine
+                if depth == 0 || scalarHasPrefix(aLine, ind) {
+                    aContent = depth > 0 ? scalarDropFirst(aLine, ind.unicodeScalars.count) : aLine
                 } else {
                     break
                 }
                 guard var ac = aContent else { break }
 
                 // Handle v2 indented attachments: strip one extra indent level.
-                if !ac.hasPrefix(".") && ac.hasPrefix("  .") {
-                    ac = String(ac.dropFirst(2))
+                if !scalarHasPrefix(ac, ".") && scalarHasPrefix(ac, "  .") {
+                    ac = scalarDropFirst(ac, 2)
                 }
 
-                if ac.hasPrefix(".") {
-                    let rest = String(ac.dropFirst())
+                if scalarHasPrefix(ac, ".") {
+                    let rest = scalarDropFirst(ac, 1)
                     let (attName, afterNameR) = parseAttachmentName(rest)
 
                     // Reject orphan attachments: a .fieldname that does not bind to a
                     // ^-marked column of this row, unless it is a ">" flatten-fallback
                     // attachment (SPEC 7.4.6.1.4).
-                    if !expectedAtt.contains(attName) && !attName.contains(">") {
+                    if !expectedAtt.contains(attName) && !attName.unicodeScalars.contains(">") {
                         throw GCFError.orphanAttachment(attName)
                     }
 
@@ -540,7 +643,7 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                     }
                     let afterNameS = afterNameR.trimmingCharacters(in: CharacterSet(charactersIn: " "))
 
-                    if let ifs = inlineSchemas[attName], !afterNameS.hasPrefix("{}"), !afterNameS.hasPrefix("[") {
+                    if let ifs = inlineSchemas[attName], !scalarHasPrefix(afterNameS, "{}"), !scalarHasPrefix(afterNameS, "[") {
                         let inlineVals = splitRespectingQuotes(afterNameS, delimiter: "|")
                         if inlineVals.count != ifs.count { throw GCFError.rowWidthMismatch(ifs.count, inlineVals.count) }
                         let obj = OrderedDictionary()
@@ -590,15 +693,15 @@ private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
             if i < lines.count {
                 let extraLine = lines[i]
                 var extraContent = ""
-                if depth == 0 || extraLine.hasPrefix(ind) {
-                    extraContent = depth > 0 ? String(extraLine.dropFirst(ind.count)) : extraLine
+                if depth == 0 || scalarHasPrefix(extraLine, ind) {
+                    extraContent = depth > 0 ? scalarDropFirst(extraLine, ind.unicodeScalars.count) : extraLine
                 }
                 // Handle v2 indented format.
-                if !extraContent.hasPrefix(".") && extraContent.hasPrefix("  .") {
-                    extraContent = String(extraContent.dropFirst(2))
+                if !scalarHasPrefix(extraContent, ".") && scalarHasPrefix(extraContent, "  .") {
+                    extraContent = scalarDropFirst(extraContent, 2)
                 }
-                if extraContent.hasPrefix(".") {
-                    let (extraName, _) = parseAttachmentName(String(extraContent.dropFirst()))
+                if scalarHasPrefix(extraContent, ".") {
+                    let (extraName, _) = parseAttachmentName(scalarDropFirst(extraContent, 1))
                     if attachmentValues[extraName] != nil {
                         throw GCFError.duplicateAttachment(extraName)
                     }
@@ -696,34 +799,39 @@ private func parseAttachment(_ lines: [String], lineIdx: Int, rest: String,
                               depth: Int) throws -> (String, Any, Int) {
     let name: String
     let afterName: String
-    if rest.unicodeScalars.first == "\"" {
-        var closeIdx: String.Index? = nil
-        var j = rest.index(after: rest.startIndex)
-        while j < rest.endIndex {
-            if rest[j] == "\\" { j = rest.index(j, offsetBy: 2, limitedBy: rest.endIndex) ?? rest.endIndex; continue }
-            if rest[j] == "\"" { closeIdx = j; break }
-            j = rest.index(after: j)
+    let rv = rest.unicodeScalars
+    if rv.first == "\"" {
+        var closeIdx: String.UnicodeScalarView.Index? = nil
+        var j = rv.index(after: rv.startIndex)
+        while j < rv.endIndex {
+            if rv[j] == "\\" { j = rv.index(j, offsetBy: 2, limitedBy: rv.endIndex) ?? rv.endIndex; continue }
+            if rv[j] == "\"" { closeIdx = j; break }
+            j = rv.index(after: j)
         }
         guard let ci = closeIdx else { throw GCFError.unterminatedQuote }
-        name = try parseQuotedString(String(rest[rest.startIndex...ci]))
-        afterName = String(rest[rest.index(after: ci)...]).trimmingCharacters(in: CharacterSet(charactersIn: " "))
+        name = try parseQuotedString(String(rv[rv.startIndex...ci]))
+        afterName = String(rv[rv.index(after: ci)...]).trimmingCharacters(in: CharacterSet(charactersIn: " "))
     } else {
-        guard let sp = rest.firstIndex(of: " ") else { throw GCFError.invalidFieldDeclaration("invalid attachment: \(rest)") }
-        name = String(rest[rest.startIndex..<sp])
-        afterName = String(rest[sp...]).trimmingCharacters(in: CharacterSet(charactersIn: " "))
+        guard let sp = scalarFirstIndex(rest, " ") else { throw GCFError.invalidFieldDeclaration("invalid attachment: \(rest)") }
+        name = String(rv[rv.startIndex..<sp])
+        afterName = String(rv[sp...]).trimmingCharacters(in: CharacterSet(charactersIn: " "))
     }
 
-    if afterName.hasPrefix("{}") {
+    if scalarHasPrefix(afterName, "{}") {
         var nested = OrderedDictionary()
         let consumed = try parseObjectBody(lines, start: lineIdx + 1, depth: depth, out: &nested)
         return (name, nested, consumed + 1)
     }
-    if afterName.hasPrefix("[") {
+    if scalarHasPrefix(afterName, "[") {
         let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: lineIdx, depth: depth, bracketPart: afterName)
         return (name, arr, consumed)
     }
-    if afterName.hasPrefix("=") {
-        let valStr = String(afterName.dropFirst())
+    if afterName.unicodeScalars.first == "=" {
+        // Detect the '=' delimiter on unicode scalars, not Characters: a value that
+        // begins with a grapheme-extending scalar (for example U+0BD7) would cluster
+        // with the leading '=' into a single Character, so hasPrefix("=") and
+        // dropFirst() would misread the value (SPEC 2.4 scalars are code points).
+        let valStr = String(afterName.unicodeScalars.dropFirst())
         let parsed = try parseScalar(valStr, tabularContext: true)
         if case .missing = parsed { return (name, NSNull(), 1) }
         return (name, try scalarToAny(parsed), 1)
@@ -740,30 +848,31 @@ private func parseExpandedBody(_ lines: [String], start: Int, depth: Int) throws
         let line = lines[i]
         let content: String
         if depth > 0 {
-            guard line.hasPrefix(ind) else { break }
-            content = String(line.dropFirst(ind.count))
+            guard scalarHasPrefix(line, ind) else { break }
+            content = scalarDropFirst(line, ind.unicodeScalars.count)
         } else {
             content = line
         }
-        if content.hasPrefix("## ") || content.hasPrefix("##!") { break }
-        guard content.hasPrefix("@") else { break }
-        guard let sp = content.firstIndex(of: " ") else { break }
+        if scalarHasPrefix(content, "## ") || scalarHasPrefix(content, "##!") { break }
+        guard scalarHasPrefix(content, "@") else { break }
+        let cv = content.unicodeScalars
+        guard let sp = scalarFirstIndex(content, " ") else { break }
 
-        let idStr = String(content[content.index(after: content.startIndex)..<sp])
+        let idStr = String(cv[cv.index(after: cv.startIndex)..<sp])
         if let id = Int(idStr), id != items.count {
             throw GCFError.invalidItemId(items.count, idStr)
         }
 
-        let marker = String(content[content.index(after: sp)...])
+        let marker = String(cv[cv.index(after: sp)...])
 
-        if marker.hasPrefix("=") {
+        if marker.unicodeScalars.first == "=" {
             let afterEq = marker.unicodeScalars.index(after: marker.unicodeScalars.startIndex)
-            let val = try scalarToAny(parseScalar(String(marker[afterEq...])))
+            let val = try scalarToAny(parseScalar(String(marker.unicodeScalars[afterEq...])))
             items.append(val)
             i += 1
             continue
         }
-        if marker.hasPrefix("{}") {
+        if scalarHasPrefix(marker, "{}") {
             var nested = OrderedDictionary()
             i += 1
             let consumed = try parseObjectBody(lines, start: i, depth: depth + 1, out: &nested)
@@ -771,7 +880,7 @@ private func parseExpandedBody(_ lines: [String], start: Int, depth: Int) throws
             i += consumed
             continue
         }
-        if marker.hasPrefix("[") {
+        if scalarHasPrefix(marker, "[") {
             let (arr, consumed) = try parseArrayFromHeader(lines, headerLine: i, depth: depth + 1, bracketPart: marker)
             items.append(arr)
             i += consumed
@@ -806,7 +915,8 @@ private func payloadToDict(_ p: Payload) -> [String: Any] {
 private func validateSummaryCounts(_ summaryLine: String, deferredCount: Int, contentLines: [String]) throws {
     var countsStr = ""
     for p in summaryLine.split(separator: " ") {
-        if p.hasPrefix("counts=") { countsStr = String(p.dropFirst(7)); break }
+        let ps = String(p)
+        if scalarHasPrefix(ps, "counts=") { countsStr = scalarDropFirst(ps, 7); break }
     }
     if countsStr.isEmpty { return }
     let countVals = countsStr.split(separator: ",").map { String($0) }
@@ -818,15 +928,15 @@ private func validateSummaryCounts(_ summaryLine: String, deferredCount: Int, co
     var currentCount = 0
     for line in contentLines {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("## ") && (trimmed.contains("[?]") || trimmed.contains("[?:]")) {
+        if scalarHasPrefix(trimmed, "## ") && (scalarContains(trimmed, "[?]") || scalarContains(trimmed, "[?:]")) {
             if inDeferred { actualCounts.append(currentCount) }
             inDeferred = true; currentCount = 0; continue
         }
-        if trimmed.hasPrefix("## ") {
+        if scalarHasPrefix(trimmed, "## ") {
             if inDeferred { actualCounts.append(currentCount); inDeferred = false }
             continue
         }
-        if inDeferred && !trimmed.hasPrefix(" ") && !trimmed.hasPrefix(".") {
+        if inDeferred && !scalarHasPrefix(trimmed, " ") && !scalarHasPrefix(trimmed, ".") {
             currentCount += 1
         }
     }
