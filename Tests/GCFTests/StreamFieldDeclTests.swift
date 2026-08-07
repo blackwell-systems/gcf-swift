@@ -110,7 +110,7 @@ final class StreamFieldDeclTests: XCTestCase {
             enc.endArray()
             try enc.close()
 
-            let wire = "GCF profile=generic\n" + sink.text
+            let wire = sink.text
             let decoded: Any
             do {
                 decoded = try decodeGeneric(wire)
@@ -172,7 +172,7 @@ final class StreamFieldDeclTests: XCTestCase {
         try enc.close()
         XCTAssertTrue(sink.text.contains("## rows [?]{id,\"a,b\"}"),
                       "header should quote the comma field: \(sink.text)")
-        let decoded = try decodeGeneric("GCF profile=generic\n" + sink.text)
+        let decoded = try decodeGeneric(sink.text)
         let top = try XCTUnwrap(decoded as? OrderedDictionary)
         let arr = try XCTUnwrap(top["rows"] as? [Any])
         let rec = try XCTUnwrap(arr.first as? OrderedDictionary)

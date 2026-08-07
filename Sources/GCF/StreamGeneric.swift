@@ -21,6 +21,7 @@ public class GenericStreamEncoder {
 
     public init(writer: StreamWriter) {
         self.writer = writer
+        self.writer.write("GCF profile=generic\n")
     }
 
     /// Start a tabular array section with deferred count [?].
