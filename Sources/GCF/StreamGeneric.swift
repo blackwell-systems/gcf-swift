@@ -11,26 +11,43 @@ import Foundation
 ///     enc.writeRow([1, "Alice", "Engineering", 95000])
 ///     enc.writeRow([2, "Bob", "Sales", 72000])
 ///     enc.endArray()
-///     enc.close()
+///     try enc.close()
 public class GenericStreamEncoder {
     private let writer: StreamWriter
     private let lock = NSLock()
     private var sections: [(name: String, count: Int)] = []
     private var current: (name: String, fields: [String], count: Int)?
+    private var pendingError: GCFError?
 
     public init(writer: StreamWriter) {
         self.writer = writer
     }
 
     /// Start a tabular array section with deferred count [?].
+    ///
+    /// The section name and every field name are quoted per Section 2.4 (via
+    /// formatKey), matching the buffered tabular header, so a name containing a
+    /// delimiter or quote produces a valid, unambiguous header. A field name
+    /// containing ">" is a flattened path that a streaming row cannot represent
+    /// (Section 8.3, 7.4.6); it is rejected and the error is surfaced at close().
     public func beginArray(_ name: String, fields: [String]) {
         lock.lock()
         defer { lock.unlock() }
 
+        if pendingError != nil {
+            return
+        }
         if current != nil {
             endArrayLocked()
         }
-        writer.write("## \(name) [?]{\(fields.joined(separator: ","))}\n")
+        for f in fields {
+            if f.contains(">") {
+                pendingError = .invalidFieldDeclaration(
+                    "streaming field name '\(f)' contains '>' (a flattened path is not representable in a streaming row)")
+                return
+            }
+        }
+        writer.write("## \(formatKey(name)) [?]{\(formatFieldDecl(fields))}\n")
         current = (name: name, fields: fields, count: 0)
     }
 
@@ -79,10 +96,16 @@ public class GenericStreamEncoder {
     }
 
     /// Emit the ##! summary trailer with final counts.
-    public func close() {
+    ///
+    /// Throws any error recorded during encoding (for example, a field name
+    /// rejected by beginArray).
+    public func close() throws {
         lock.lock()
         defer { lock.unlock() }
 
+        if let err = pendingError {
+            throw err
+        }
         if current != nil {
             endArrayLocked()
         }
@@ -97,6 +120,14 @@ public class GenericStreamEncoder {
         sections.append((name: cur.name, count: cur.count))
         current = nil
     }
+}
+
+/// Quotes each field name per Section 2.4 (via formatKey), matching the buffered
+/// tabular header. The streaming header previously joined field names raw, so a
+/// name containing a delimiter or quote produced an invalid or ambiguous header
+/// (Section 8.3).
+private func formatFieldDecl(_ fields: [String]) -> String {
+    return fields.map { formatKey($0) }.joined(separator: ",")
 }
 
 private func formatValue(_ v: Any?) -> String {
