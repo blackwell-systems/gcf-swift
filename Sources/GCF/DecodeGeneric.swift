@@ -57,8 +57,16 @@ public func decodeGeneric(_ input: String) throws -> Any {
 
     // Root array.
     if scalarHasPrefix(first, "## [") {
-        let (arr, _) = try parseArrayFromHeader(contentLines, headerLine: 0, depth: 0,
+        let (arr, consumed) = try parseArrayFromHeader(contentLines, headerLine: 0, depth: 0,
                                                   bracketPart: scalarDropFirst(first, 3))
+        // A root array or keyed map spans the whole document, so any structural line
+        // past the consumed rows is a surplus item, not sibling content. The row loop
+        // stops at the declared count, so the count assert only catches the deficit
+        // case; surplus is caught here (SPEC Section 13: a mismatch, fewer OR more
+        // items than declared, is an error).
+        if consumed < contentLines.count {
+            throw GCFError.countMismatch(consumed - 1, contentLines.count - 1)
+        }
         return arr
     }
 

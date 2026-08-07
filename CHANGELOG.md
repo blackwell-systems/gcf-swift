@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.6.0 (2026-08-07)
+
+- Decoders now reject a declared `[N]` section count that does not match the actual item count, in both directions, per SPEC Section 13 (Count Validation). A declared count smaller than the rows or entries present was previously read as a limit and the surplus was dropped; it is now an error. Covers the generic tabular, keyed-map, and root-array forms, the delta and full-set decoders, and the graph `## edges [N]` section. Valid payloads and encoding are unchanged.
+
+- Adds `DecodeError.countMismatch`, thrown for the rejection above. This is additive public API, hence the minor version bump.
+
 ## v2.5.0 (2026-08-07)
 
 ### Added

@@ -401,15 +401,24 @@ public func decodeGenericFull(_ text: String) throws -> (set: GenericSet, packRo
     var i = 1
     while i < lines.count {
         let line = lines[i]
-        if !scalarHasPrefix(line, "## ") { i += 1; continue }
+        if !scalarHasPrefix(line, "## ") {
+            // Only blank lines, comments, and the ##! summary trailer are valid
+            // outside a section; any other line is a surplus row past a declared
+            // section count (Section 13).
+            if line.isEmpty || scalarHasPrefix(line, "# ") || scalarHasPrefix(line, "##! ") {
+                i += 1
+                continue
+            }
+            throw GenericDeltaError("count_mismatch: unexpected content after declared section rows: \"\(line)\"")
+        }
         let (name, count, fields, keyField) = try parseSectionHeader(scalarDropFirst(line, 3))
         set.name = name
         set.fields = fields
         if set.key.isEmpty { set.key = keyField }
         i += 1
-        for _ in 0..<count {
-            if i >= lines.count {
-                throw GenericDeltaError("delta_invalid: fewer rows than declared count")
+        for j in 0..<count {
+            if i >= lines.count || scalarHasPrefix(lines[i], "## ") {
+                throw GenericDeltaError("count_mismatch: declared \(count) rows, got \(j)")
             }
             set.rows.append(try parseRow(lines[i], fields))
             i += 1
@@ -438,7 +447,16 @@ public func decodeGenericDelta(_ text: String) throws -> GenericDeltaPayload {
     var i = 1
     while i < lines.count {
         let line = lines[i]
-        if !scalarHasPrefix(line, "## ") { i += 1; continue }
+        if !scalarHasPrefix(line, "## ") {
+            // Only blank lines, comments, and the ##! summary trailer are valid
+            // outside a section; any other line is a surplus row past a declared
+            // section count (Section 13).
+            if line.isEmpty || scalarHasPrefix(line, "# ") || scalarHasPrefix(line, "##! ") {
+                i += 1
+                continue
+            }
+            throw GenericDeltaError("count_mismatch: unexpected content after declared section rows: \"\(line)\"")
+        }
         let (name, count, fields, keyField) = try parseSectionHeader(scalarDropFirst(line, 3))
         if d.key.isEmpty && !keyField.isEmpty { d.key = keyField }
         if !fieldsSet && (name == "added" || name == "changed") {
@@ -449,18 +467,18 @@ public func decodeGenericDelta(_ text: String) throws -> GenericDeltaPayload {
         switch name {
         case "added", "changed":
             var rows: [[String: Any]] = []
-            for _ in 0..<count {
-                if i >= lines.count {
-                    throw GenericDeltaError("delta_invalid: fewer rows than declared count in ## \(name)")
+            for j in 0..<count {
+                if i >= lines.count || scalarHasPrefix(lines[i], "## ") {
+                    throw GenericDeltaError("count_mismatch: declared \(count) rows in ## \(name), got \(j)")
                 }
                 rows.append(try parseRow(lines[i], fields))
                 i += 1
             }
             if name == "added" { d.added = rows } else { d.changed = rows }
         case "removed":
-            for _ in 0..<count {
-                if i >= lines.count {
-                    throw GenericDeltaError("delta_invalid: fewer identities than declared count in ## removed")
+            for j in 0..<count {
+                if i >= lines.count || scalarHasPrefix(lines[i], "## ") {
+                    throw GenericDeltaError("count_mismatch: declared \(count) identities in ## removed, got \(j)")
                 }
                 d.removed.append(try scalarToAny(parseScalar(lines[i], tabularContext: true)))
                 i += 1

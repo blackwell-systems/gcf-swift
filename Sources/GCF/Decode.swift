@@ -10,6 +10,7 @@ public enum DecodeError: Error, Equatable, CustomStringConvertible {
     case invalidEdgeLine(String)
     case unknownEdgeID(String)
     case malformedDelta(String)
+    case countMismatch(String)
 
     public var description: String {
         switch self {
@@ -21,6 +22,7 @@ public enum DecodeError: Error, Equatable, CustomStringConvertible {
         case .invalidEdgeLine(let l): return "invalid_edge_syntax: \(l)"
         case .unknownEdgeID(let l): return "unknown_edge_reference: \(l)"
         case .malformedDelta(let s): return "malformed_delta: \(s)"
+        case .countMismatch(let s): return "count_mismatch: \(s)"
         }
     }
 }
@@ -53,6 +55,8 @@ public func decode(_ input: String) throws -> Payload {
     var symByID: [Int: Int] = [:] // symbol ID -> index in symbols array
     var currentDistance = 0
     var inEdges = false
+    var declaredEdges = -1
+    var edgesDeclared = false
 
     for line in lines.dropFirst() {
         let trimmed = scalarHasSuffix(line, "\r") ? String(line.unicodeScalars.dropLast()) : line
@@ -64,16 +68,34 @@ public func decode(_ input: String) throws -> Payload {
         // Group header.
         if scalarHasPrefix(trimmed, "## ") {
             var group = scalarDropFirst(trimmed, 3)
-            // Strip bracket suffix: "edges [200]" -> "edges". Locate the " ["
+            // Strip bracket suffix: "edges [200]" -> "edges", capturing the
+            // declared count so it can be enforced per Section 13. Locate the " ["
             // delimiter over scalars so a group name adjacent to a
             // grapheme-extending scalar is not misread (SPEC 2.4).
+            var declaredCount = -1
             let gv = group.unicodeScalars
             var gi = gv.startIndex
             while gi < gv.endIndex {
                 if gv[gi] == " " {
                     let nxt = gv.index(after: gi)
                     if nxt < gv.endIndex && gv[nxt] == "[" {
-                        group = String(gv[gv.startIndex..<gi])
+                        let groupName = String(gv[gv.startIndex..<gi])
+                        // Extract the count between "[" and "]".
+                        var ci = gv.index(after: nxt)
+                        var cntScalars = String.UnicodeScalarView()
+                        while ci < gv.endIndex && gv[ci] != "]" {
+                            cntScalars.append(gv[ci])
+                            ci = gv.index(after: ci)
+                        }
+                        let cntStr = String(cntScalars)
+                        if cntStr != "?" && !cntStr.isEmpty { // "[?]" is a streaming deferred count (Section 8)
+                            if let n = Int(cntStr) {
+                                declaredCount = n
+                            } else {
+                                throw DecodeError.countMismatch("invalid section count \"\(cntStr)\"")
+                            }
+                        }
+                        group = groupName
                         break
                     }
                 }
@@ -83,6 +105,10 @@ public func decode(_ input: String) throws -> Payload {
                 throw DecodeError.malformedDelta("invalid delta section \"\(group)\"")
             }
             inEdges = (group == "edges")
+            if inEdges && declaredCount >= 0 {
+                declaredEdges = declaredCount
+                edgesDeclared = true
+            }
             if !inEdges {
                 switch group {
                 case "targets": currentDistance = 0
@@ -109,6 +135,12 @@ public func decode(_ input: String) throws -> Payload {
             symByID[id] = symbols.count
             symbols.append(sym)
         }
+    }
+
+    // Section 13: a declared [N] section count MUST match the actual item count.
+    // The graph edges section is the graph profile's only [N]-bearing section.
+    if edgesDeclared && p.edges.count != declaredEdges {
+        throw DecodeError.countMismatch("declared \(declaredEdges) edges, got \(p.edges.count)")
     }
 
     p.symbols = symbols
