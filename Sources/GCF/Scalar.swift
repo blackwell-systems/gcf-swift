@@ -18,6 +18,9 @@ private let inlineArrayPattern = try! NSRegularExpression(
 public func needsQuote(_ s: String) -> Bool {
     if s.isEmpty { return true }
     if s == "-" || s == "~" || s == "^" || s == "true" || s == "false" { return true }
+    // A value shaped like an inline-schema attachment marker (^{...}) would decode
+    // as an attachment and lose the string, so it must be quoted (SPEC 2.4).
+    if s.count >= 3 && s.hasPrefix("^{") && s.hasSuffix("}") { return true }
     let range = NSRange(s.startIndex..., in: s)
     if jsonNumberPattern.firstMatch(in: s, range: range) != nil { return true }
     if numericLikePattern.firstMatch(in: s, range: range) != nil { return true }
@@ -27,10 +30,12 @@ public func needsQuote(_ s: String) -> Bool {
     for c in s.unicodeScalars {
         if c == "\"" || c == "\\" || c == "|" || c == "," || c.value < 0x20
             || c == "\n" || c == "\r" { return true }
-        // Quote any non-ASCII character. Swift's grapheme clustering can merge
-        // non-ASCII characters (combining marks, Thai vowels, etc.) with adjacent
-        // ASCII delimiters like =, |, and ", breaking parse operations.
-        if c.value > 0x7F { return true }
+        // Quote non-ASCII C1 controls, whitespace, and the BOM (which can break
+        // parsing), but leave ordinary non-ASCII letters bare, matching the other
+        // SDKs so canonical output is identical cross-SDK (SPEC 2.4).
+        if c.value >= 0x80 && c.value <= 0x9F { return true }        // C1 controls
+        if c.value > 0x7F && c.properties.isWhitespace { return true } // non-ASCII whitespace
+        if c.value == 0xFEFF { return true }                         // BOM
     }
     return false
 }
