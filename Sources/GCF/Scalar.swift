@@ -90,7 +90,8 @@ public func formatScalar(_ value: Any?, delimiter: Character = "\0") -> String {
 public func formatNumber(_ f: Double) -> String {
     if f.isNaN || f.isInfinite { return "0" }
     if f == 0 {
-        return f.sign == .minus ? "-0" : "0"
+        // Negative zero canonicalizes to 0 (SPEC 2.3.1): -0.0 equals 0.0 by value.
+        return "0"
     }
     let a = abs(f)
     if a >= 1e-6 && a < 1e21 {

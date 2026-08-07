@@ -56,14 +56,6 @@ final class ConformanceV2Test: XCTestCase {
                 skipped += 1
                 continue
             }
-            // negative_zero: the generic decoder collapses the integer form -0 to 0,
-            // so re-encode idempotence cannot hold. This is a pre-existing decode-value
-            // gap (unrelated to field order) and is deliberately skipped across SDKs;
-            // the Python reference runner skips it for the same reason.
-            if rel.contains("negative_zero") {
-                skipped += 1
-                continue
-            }
             do {
                 try runFixture(rel: rel, op: op, fx: fx)
                 ran += 1
