@@ -2,11 +2,13 @@ import Foundation
 
 // MARK: - Common Scalar Grammar for GCF v2.0
 
+// Digits are ASCII 0-9 (SPEC 2.3): \d is avoided because ICU's regex \d also matches
+// Unicode decimal digits (\p{Nd}), which would accept e.g. "1.<U+0665>".
 private let jsonNumberPattern = try! NSRegularExpression(
-    pattern: "\\A-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\z"
+    pattern: "\\A-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\\z"
 )
 private let numericLikePattern = try! NSRegularExpression(
-    pattern: "\\A[+-]\\.?\\d|\\A\\.\\d|\\A0\\d"
+    pattern: "\\A[+-]\\.?[0-9]|\\A\\.[0-9]|\\A0[0-9]"
 )
 private let bareKeyPattern = try! NSRegularExpression(
     pattern: "\\A[a-zA-Z_][a-zA-Z0-9_]*\\z"
