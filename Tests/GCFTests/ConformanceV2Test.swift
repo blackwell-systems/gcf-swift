@@ -43,9 +43,27 @@ final class ConformanceV2Test: XCTestCase {
         var ran = 0, skipped = 0
         for url in files {
             let rel = url.path.replacingOccurrences(of: dir.path + "/", with: "")
-            guard let data = try? Data(contentsOf: url),
-                  let fx = (try? parseJSONOrdered(data)) as? OrderedDictionary
-            else {
+            guard let data = try? Data(contentsOf: url) else {
+                XCTFail("cannot read fixture \(rel)")
+                continue
+            }
+            // An `encode-error` fixture carries an out-of-domain `input` value (e.g.
+            // an integer beyond int64) that the JSON->value bridge is REQUIRED to
+            // reject; parsing the whole envelope with that bridge would therefore
+            // throw at load time. Detect the operation leniently (JSONSerialization
+            // coerces big ints to NSNumber without throwing) and hand the raw input
+            // bytes straight to the encode-error runner.
+            if let env = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               (env["operation"] as? String) == "encode-error" {
+                do {
+                    try runEncodeErrorFixture(rel: rel, envelope: env, expectedError: env["expectedError"] as? String)
+                    ran += 1
+                } catch {
+                    XCTFail("\(rel): \(error)")
+                }
+                continue
+            }
+            guard let fx = (try? parseJSONOrdered(data)) as? OrderedDictionary else {
                 XCTFail("cannot parse fixture \(rel)")
                 continue
             }
@@ -114,6 +132,15 @@ final class ConformanceV2Test: XCTestCase {
             XCTAssertTrue(deepEqual(input, decoded), "round-trip \(rel)")
             // Re-encode idempotence: order-sensitive, catches decode field-order loss.
             XCTAssertEqual(encodeGeneric(decoded), got, "re-encode idempotence \(rel)")
+        case "roundtrip-wire":
+            // input and expected are both wire strings. Decode the input wire and
+            // re-encode; the result MUST equal the expected wire byte-for-byte. The
+            // value never becomes a host JSON number, so integers a JSON parser would
+            // float (magnitudes beyond 2^53) are pinned exactly here (SPEC 2.3.2).
+            let input = fx["input"] as? String ?? ""
+            let expected = fx["expected"] as? String ?? ""
+            let decoded = try decodeGeneric(input)
+            XCTAssertEqual(encodeGeneric(decoded), expected, rel)
         case "error":
             let input = fx["input"] as? String ?? ""
             XCTAssertThrowsError(try decodeGeneric(input), rel)
@@ -181,6 +208,31 @@ final class ConformanceV2Test: XCTestCase {
             // handled or explicitly allow-listed for skipping. This fails loudly so a
             // future op added to the shared fixtures cannot pass silently as a no-op.
             XCTFail("unhandled operation: \(op); must be handled or allow-listed (\(rel))")
+        }
+    }
+
+    /// Handles the `encode-error` operation. The fixture's `input` is a JSON value
+    /// (encode-side, not a wire string) that lies outside the numeric domain. Ingest
+    /// through the JSON->value bridge (`parseJSONOrdered`, the same path the `encode`
+    /// op uses) and, if that preserves the value, through the encoder; the pipeline
+    /// MUST throw. The out-of-domain input cannot survive our own bridge, so the raw
+    /// input bytes are recovered by re-serializing the leniently-parsed envelope
+    /// (JSONSerialization coerces the big integer to an NSNumber, which round-trips
+    /// its digits) and handed to the bridge as text (SPEC 2.3.2).
+    private func runEncodeErrorFixture(rel: String, envelope: [String: Any], expectedError: String?) throws {
+        guard let inputValue = envelope["input"] else {
+            XCTFail("\(rel): encode-error fixture has no input")
+            return
+        }
+        // Re-serialize the input value to JSON text so it flows through the actual
+        // JSON->value bridge, not the already-coerced JSONSerialization objects.
+        let inputData = try JSONSerialization.data(
+            withJSONObject: inputValue, options: [.fragmentsAllowed])
+        XCTAssertThrowsError(try { _ = encodeGeneric(try parseJSONOrdered(inputData)) }(), rel) { err in
+            if let expectedError = expectedError {
+                XCTAssertTrue("\(err)".contains(expectedError),
+                              "\(rel): expected '\(expectedError)', got \(err)")
+            }
         }
     }
 

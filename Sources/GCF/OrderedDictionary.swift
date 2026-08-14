@@ -224,12 +224,14 @@ private struct JSONOrderedParser {
             guard let d = Double(str) else { throw GCFError.invalidJSON("invalid number: \(str)") }
             return d
         }
-        // Preserve negative zero (Int cannot represent it).
-        if str == "-0" { return -0.0 }
+        // Token shape follows domain (SPEC 2.3.2): a bare-integer literal (no
+        // fraction, no exponent) is an int64-domain integer and is ingested to an
+        // exact native Int (64-bit), NOT routed through Double, which would silently
+        // approximate magnitudes beyond 2^53. A bare `-0` is integer zero (SPEC
+        // 2.3.1). An integer literal that overflows Int is outside the int64 domain
+        // and is rejected here rather than floated.
         if let n = Int(str) { return n }
-        // Integer literal out of Int range: fall back to Double.
-        guard let d = Double(str) else { throw GCFError.invalidJSON("invalid number: \(str)") }
-        return d
+        throw GCFError.outOfRange(str)
     }
 
     private func isDigit(_ c: Unicode.Scalar) -> Bool { c >= "0" && c <= "9" }

@@ -109,7 +109,13 @@ public func formatNumber(_ f: Double) -> String {
         return "0"
     }
     let a = abs(f)
-    if a >= 1e-6 && a < 1e21 {
+    // Plain decimal only below 2^53. Every double at or above 2^53 is integer-valued,
+    // so a plain rendering would emit a bare-integer token: indistinguishable from an
+    // int64 on the wire and beyond the binary64 safe-integer range (2^53-1), so a
+    // JavaScript decoder rejects it under its default policy. Exponent shape keeps bare
+    // tokens int64 and decimal/exponent tokens doubles (SPEC 2.3.1). 9007199254740992.0
+    // is 2^53.
+    if a >= 1e-6 && a < 9007199254740992.0 {
         var s = "\(f)"
         // Swift may use scientific notation; convert to plain decimal.
         if s.contains("e") || s.contains("E") {
@@ -177,6 +183,16 @@ public enum ScalarResult {
     case inlineAttachment(String)
 }
 
+/// True if `s` is an optionally-signed run of ASCII digits (a bare integer literal).
+/// Used to tell an int64-overflowing integer token (out of domain) apart from a
+/// non-numeric token when native Int parsing returns nil.
+private func isDigitLiteral(_ s: String) -> Bool {
+    var scalars = Substring(s).unicodeScalars[...]
+    if scalars.first == "-" { scalars = scalars.dropFirst() }
+    if scalars.isEmpty { return false }
+    return scalars.allSatisfy { $0 >= "0" && $0 <= "9" }
+}
+
 public func parseScalar(_ s: String, tabularContext: Bool = false) throws -> ScalarResult {
     if s.isEmpty { return .string("") }
     if s.unicodeScalars.first == "\"" { return .string(try parseQuotedString(s)) }
@@ -194,12 +210,22 @@ public func parseScalar(_ s: String, tabularContext: Bool = false) throws -> Sca
     if s == "false" { return .bool(false) }
     let range = NSRange(s.startIndex..., in: s)
     if jsonNumberPattern.firstMatch(in: s, range: range) != nil {
+        // A bare-integer literal (no fraction, no exponent) is an int64-domain
+        // integer and is parsed directly to a native Int (64-bit on every supported
+        // platform), so the full signed 64-bit domain round-trips exactly. Routing
+        // it through a Double would silently approximate any magnitude beyond 2^53
+        // (SPEC 2.3.2). `-0` is bare-integer syntax and decodes to the value zero,
+        // not a Double -0.0 (SPEC 2.3.1). A digit-shaped token that overflows Int is
+        // out of the int64 domain and is rejected, not floated.
+        if !s.contains(".") && !s.contains("e") && !s.contains("E") {
+            if let i = Int(s) { return .int(i) }
+            // Int(s) returned nil: distinguish an all-digits (optionally signed)
+            // token that overflowed int64 (out of domain) from a token that is not a
+            // parseable integer at all (falls through to a bare string).
+            if isDigitLiteral(s) { throw GCFError.outOfRange(s) }
+            return .string(s)
+        }
         if let d = Double(s) {
-            if !s.contains(".") && !s.contains("e") && !s.contains("E") {
-                if abs(d) <= Double(1 << 53) {
-                    return .int(Int(d))
-                }
-            }
             return .double(d)
         }
     }
@@ -233,6 +259,7 @@ public enum GCFError: Error, CustomStringConvertible {
     case invalidItemId(Int, String)
     case invalidFieldDeclaration(String)
     case invalidJSON(String)
+    case outOfRange(String)
 
     public var description: String {
         switch self {
@@ -262,6 +289,7 @@ public enum GCFError: Error, CustomStringConvertible {
         case .duplicateAttachment(let f): return "duplicate_attachment: \(f)"
         case .invalidItemId(let e, let g): return "invalid_item_id: expected @\(e), got @\(g)"
         case .invalidFieldDeclaration(let s): return "invalid field declaration: \(s)"
+        case .outOfRange(let v): return "out_of_range: integer \(v) is outside the canonical int64 domain [-9223372036854775808, 9223372036854775807]; model larger values as strings (SPEC 2.3.2)"
         }
     }
 }
