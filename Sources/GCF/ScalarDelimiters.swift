@@ -55,6 +55,33 @@ func scalarFirstIndex(_ s: String, _ scalar: Unicode.Scalar) -> String.UnicodeSc
     return nil
 }
 
+/// Index of the "[" that opens a named-array marker (name[N]:), scanning past a
+/// quoted key so a "[" inside the key name is not mistaken for the array bracket
+/// (SPEC 4.2). Bare keys cannot contain "[".
+func arrayBracketStart(_ s: String) -> String.UnicodeScalarView.Index? {
+    let scalars = s.unicodeScalars
+    let start = scalars.startIndex
+    let end = scalars.endIndex
+    guard start < end, scalars[start] == "\"" else {
+        return scalarFirstIndex(s, "[")
+    }
+    var i = scalars.index(after: start)
+    var escaped = false
+    while i < end {
+        let c = scalars[i]
+        if escaped {
+            escaped = false
+        } else if c == "\\" {
+            escaped = true
+        } else if c == "\"" {
+            let next = scalars.index(after: i)
+            return (next < end && scalars[next] == "[") ? next : nil
+        }
+        i = scalars.index(after: i)
+    }
+    return nil
+}
+
 /// The first unicode scalar of `s`, or nil when empty.
 func firstScalar(_ s: String) -> Unicode.Scalar? {
     return s.unicodeScalars.first

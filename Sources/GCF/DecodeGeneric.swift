@@ -157,7 +157,7 @@ private func parseObjectBody(_ lines: [String], start: Int, depth: Int,
 
         // Inline array (e.g. items[3]: a,b,c). Only reached if no = found.
         if !scalarHasPrefix(content, "@") && !scalarHasPrefix(content, "##") {
-            if let bracketIdx = scalarFirstIndex(content, "["), bracketIdx > content.unicodeScalars.startIndex {
+            if let bracketIdx = arrayBracketStart(content), bracketIdx > content.unicodeScalars.startIndex {
                 let rest = String(content.unicodeScalars[bracketIdx...])
                 if let closeIdx = scalarFirstIndex(rest, "]") {
                     let after = String(rest.unicodeScalars[rest.unicodeScalars.index(after: closeIdx)...])
