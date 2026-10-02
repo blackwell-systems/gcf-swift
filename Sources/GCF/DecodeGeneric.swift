@@ -272,7 +272,38 @@ private func parseArrayFromHeader(_ lines: [String], headerLine: Int, depth: Int
     if scalarHasPrefix(after, "{") {
         guard let braceEnd = findClosingBrace(after) else { throw GCFError.invalidFieldDeclaration(after) }
         let braceIdx = after.unicodeScalars.index(after.unicodeScalars.startIndex, offsetBy: braceEnd)
-        let declStr = String(after.unicodeScalars[after.unicodeScalars.startIndex...braceIdx])
+        let av = after.unicodeScalars
+        let declStr = String(av[av.startIndex...braceIdx])
+        let afterBrace = String(av[av.index(after: braceIdx)...])
+        let groupClause = afterBrace.trimmingCharacters(in: CharacterSet(charactersIn: " "))
+
+        // Value-grouping (SPEC 7.4.8): non-keyed tabular array with a group= clause.
+        if !keyed && scalarHasPrefix(groupClause, "group=") {
+            let entries = try parseFieldEntries(declStr)
+            return try decodeGroupedArray(lines, headerLine: headerLine, depth: depth, entries: entries, groupClause: groupClause, count: count)
+        }
+        if !groupClause.isEmpty {
+            throw GCFError.malformedHeaderField("unexpected content after field declaration: \(groupClause)")
+        }
+
+        // Constant-column factoring (SPEC 7.4.7): a non-keyed tabular array whose field
+        // declaration carries name=value entries (or a stray @, which is valid only with
+        // a group= clause). The common case (no "=" or "@") takes the plain path.
+        if !keyed && (scalarContains(declStr, "=") || scalarContains(declStr, "@")) {
+            let entries = try parseFieldEntries(declStr)
+            var hasConst = false
+            for e in entries {
+                if e.isKey {
+                    throw GCFError.invalidFieldName("@\(e.name) (an @ key column is valid only in a grouped section)")
+                }
+                if e.isConst { hasConst = true }
+            }
+            if hasConst {
+                return try decodeConstantArray(lines, headerLine: headerLine, depth: depth, entries: entries, count: count)
+            }
+            // No constants after all (e.g. a quoted name containing "="): plain path.
+        }
+
         let fields = try splitFieldDecl(declStr)
         // A keyed header MUST declare at least two fields: the key column plus at
         // least one value field (SPEC 7.2a.2).
@@ -426,7 +457,7 @@ private func findClosingBraceSwift(_ s: String) -> Int? {
     return nil
 }
 
-private func parseTabularBody(_ lines: [String], start: Int, depth: Int,
+func parseTabularBody(_ lines: [String], start: Int, depth: Int,
                                fields: [String], expectedCount: Int) throws -> ([Any], Int) {
     let ind = String(repeating: "  ", count: depth)
     var rows: [Any] = []

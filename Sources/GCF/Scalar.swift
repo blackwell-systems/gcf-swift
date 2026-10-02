@@ -258,6 +258,11 @@ public enum GCFError: Error, CustomStringConvertible {
     case duplicateAttachment(String)
     case invalidItemId(Int, String)
     case invalidFieldDeclaration(String)
+    case invalidFieldName(String)
+    case invalidConstValue(String)
+    case noBareColumn(String)
+    case invalidGroupHeader(String)
+    case duplicateGroup(String)
     case invalidJSON(String)
     case outOfRange(String)
 
@@ -289,6 +294,11 @@ public enum GCFError: Error, CustomStringConvertible {
         case .duplicateAttachment(let f): return "duplicate_attachment: \(f)"
         case .invalidItemId(let e, let g): return "invalid_item_id: expected @\(e), got @\(g)"
         case .invalidFieldDeclaration(let s): return "invalid field declaration: \(s)"
+        case .invalidFieldName(let s): return "invalid field name: \(s)"
+        case .invalidConstValue(let s): return "invalid_const_value: \(s)"
+        case .noBareColumn(let s): return "no_bare_column: \(s)"
+        case .invalidGroupHeader(let s): return "invalid_group_header: \(s)"
+        case .duplicateGroup(let s): return "duplicate_group: \(s)"
         case .outOfRange(let v): return "out_of_range: integer \(v) is outside the canonical int64 domain [-9223372036854775808, 9223372036854775807]; model larger values as strings (SPEC 2.3.2)"
         }
     }

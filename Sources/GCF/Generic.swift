@@ -94,7 +94,7 @@ private func encodeRootArray(_ arr: [Any], out: inout String, opts: GenericOptio
         return
     }
     if let fields = tabularFields(arr) {
-        encodeTabular("## ", arr: arr, fields: fields, out: &out, depth: 0, opts: opts)
+        encodeTabular("## ", arr: arr, fields: fields, out: &out, depth: 0, opts: opts, factorConst: true)
         return
     }
     encodeExpanded("## ", arr: arr, out: &out, depth: 0, opts: opts)
@@ -109,7 +109,7 @@ private func encodeNamedArray(_ name: String, arr: [Any], out: inout String, dep
         return
     }
     if let fields = tabularFields(arr) {
-        encodeTabular("\(prefix)## \(name) ", arr: arr, fields: fields, out: &out, depth: depth, opts: opts)
+        encodeTabular("\(prefix)## \(name) ", arr: arr, fields: fields, out: &out, depth: depth, opts: opts, factorConst: true)
         return
     }
     encodeExpanded("\(prefix)## \(name) ", arr: arr, out: &out, depth: depth, opts: opts)
@@ -307,7 +307,7 @@ private func resolveKeyChain(_ item: Any, keys: [String]) -> (Any?, Bool) {
     return (current, true)
 }
 
-func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int, opts: GenericOptions, keyed: Bool = false) {
+func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: inout String, depth: Int, opts: GenericOptions, keyed: Bool = false, factorConst: Bool = false) {
     let prefix = indentStr(depth)
 
     // Phase 0: Analyze fields for flattening.
@@ -354,7 +354,47 @@ func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: in
         if let sas = sharedArraySchema(arr, fieldName: f) { sharedArrSchemas[f] = sas }
     }
 
-    let headerFields = columns.map { $0.header }
+    // Constant-column factoring (SPEC 7.4.7): a plain scalar column identical across
+    // every record is declared once in the header as name=value and omitted from the
+    // rows. Mandatory canonical for tabular arrays, gated off for keyed maps and the
+    // nested-attachment path (factorConst). At least one per-record column remains.
+    var constCol = [Bool](repeating: false, count: columns.count)
+    var constHeaderVal = [String](repeating: "", count: columns.count)
+    if factorConst && !keyed && arr.count >= 2 {
+        for (j, col) in columns.enumerated() {
+            if col.type != "original" { continue } // only plain scalar columns, never flattened/attachment
+            var first = ""
+            var firstSet = false
+            var isConst = true
+            for item in arr {
+                guard let pairs = asOrderedDict(item) else { isConst = false; break }
+                let d = Dictionary(uniqueKeysWithValues: pairs)
+                guard let v = d[col.field] else { isConst = false; break }
+                if asOrderedDict(v) != nil || v is [Any] { isConst = false; break }
+                let cv = formatConstValue(v)
+                if !firstSet {
+                    first = cv
+                    firstSet = true
+                } else if cv != first {
+                    isConst = false
+                    break
+                }
+            }
+            if isConst {
+                constCol[j] = true
+                constHeaderVal[j] = first
+            }
+        }
+        // At least one per-record column MUST remain. If every column is constant
+        // (an array of identical objects), leave the last union field unfactored.
+        if !constCol.contains(false) {
+            constCol[columns.count - 1] = false
+        }
+    }
+
+    let headerFields = columns.enumerated().map { (i, col) -> String in
+        constCol[i] ? "\(col.header)=\(constHeaderVal[i])" : col.header
+    }
     let bracket = keyed ? ":]" : "]"
     out += "\(headerPrefix)[\(arr.count)\(bracket){\(headerFields.joined(separator: ","))}\n"
 
@@ -412,7 +452,11 @@ func encodeTabular(_ headerPrefix: String, arr: [Any], fields: [String], out: in
             attachments.append(Att(name: f, value: v, inline: false, inlineFields: nil))
         }
 
-        let row = cells.joined(separator: "|")
+        // Omit constant columns from the per-row cells (SPEC 7.4.7.3).
+        var rowCells: [String] = []
+        rowCells.reserveCapacity(cells.count)
+        for j in cells.indices where !constCol[j] { rowCells.append(cells[j]) }
+        let row = rowCells.joined(separator: "|")
         if rowHasAttachment {
             out += "\(prefix)@\(i) \(row)\n"
         } else {
